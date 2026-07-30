@@ -184,7 +184,7 @@ class PostgresCollector:
                     print("[whyslow] Write-lock contention happens on the WRITER and will be")
                     print("[whyslow] INVISIBLE from here. This collector will report 'no")
                     print("[whyslow] blocking found' no matter what the primary is doing.")
-                    print("[whyslow] Point --dsn at the cluster WRITER endpoint instead.")
+                    print("[whyslow] Point the DSN at the cluster WRITER endpoint instead.")
                     print("[whyslow] " + "!" * 60)
                 backoff = 1.0  # reset after a successful connect
 

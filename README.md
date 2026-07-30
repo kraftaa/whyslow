@@ -72,10 +72,16 @@ Run collectors as long-lived processes (systemd unit, supervisor,
 whatever you already use):
 
 ```bash
-whyslow collect-pg    --dsn "postgresql://user:pass@host/db"
-whyslow collect-puma  --host-name web-3 --stats-url http://127.0.0.1:9293/stats --token $PUMA_TOKEN
+export WHYSLOW_PG_DSN="postgresql://user:pass@host/db"
+export WHYSLOW_PUMA_TOKEN="replace-me"
+
+whyslow collect-pg
+whyslow collect-puma  --host-name web-3 --stats-url http://127.0.0.1:9293/stats
 whyslow collect-cw    --db-instance-id my-aurora-cluster   # requires: pip install -e ".[cloudwatch]"
 ```
+
+`--dsn` and `--token` remain available for local testing, but environment
+variables keep secrets out of process arguments in production.
 
 Then, after (or during) an incident:
 

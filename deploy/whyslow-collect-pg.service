@@ -14,7 +14,6 @@ Group=whyslow
 # be visible in `ps` output to every user on the box).
 EnvironmentFile=/etc/whyslow/postgres.env
 ExecStart=/usr/local/bin/whyslow collect-pg \
-    --dsn ${WHYSLOW_PG_DSN} \
     --db /var/lib/whyslow/store.sqlite3 \
     --interval 1.0
 

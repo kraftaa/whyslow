@@ -14,7 +14,8 @@ wrong.
 
 ```bash
 # on the host with DB credentials -- WRITER endpoint
-whyslow collect-pg --dsn "$WHYSLOW_PG_DSN" --db /var/lib/whyslow/store.sqlite3
+export WHYSLOW_PG_DSN="postgresql://user:pass@writer-endpoint/db"
+whyslow collect-pg --db /var/lib/whyslow/store.sqlite3
 
 # on each web host
 whyslow collect-puma --host-name $(hostname) --stats-url http://127.0.0.1:9293/stats

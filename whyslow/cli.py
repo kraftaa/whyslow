@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -64,6 +65,10 @@ def parse_time(s):
 
 
 def cmd_collect_pg(args):
+    if not args.dsn:
+        raise SystemExit(
+            "Postgres DSN required: set WHYSLOW_PG_DSN or pass --dsn"
+        )
     store = Store(args.db)
     collector = PostgresCollector(args.dsn, store, interval=args.interval)
     collector.run_forever()
@@ -141,7 +146,11 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=False)
 
     p = sub.add_parser("collect-pg", help="poll pg_stat_activity + blocking chains")
-    p.add_argument("--dsn", required=True, help="postgres connection string")
+    p.add_argument(
+        "--dsn",
+        default=os.environ.get("WHYSLOW_PG_DSN"),
+        help="postgres connection string (default: WHYSLOW_PG_DSN)",
+    )
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.add_argument("--interval", type=float, default=1.0)
     p.set_defaults(func=cmd_collect_pg)
@@ -149,7 +158,11 @@ def main(argv=None):
     p = sub.add_parser("collect-puma", help="poll a Puma control-app /stats endpoint")
     p.add_argument("--host-name", required=True)
     p.add_argument("--stats-url", required=True)
-    p.add_argument("--token", default=None)
+    p.add_argument(
+        "--token",
+        default=os.environ.get("WHYSLOW_PUMA_TOKEN"),
+        help="Puma bearer token (default: WHYSLOW_PUMA_TOKEN)",
+    )
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.add_argument("--interval", type=float, default=1.0)
     p.set_defaults(func=cmd_collect_puma)

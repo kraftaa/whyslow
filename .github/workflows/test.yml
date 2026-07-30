@@ -95,3 +95,6 @@ jobs:
 
       - name: Default-action test (`whyslow --last 15m` routes to explain)
         run: python3 tests/default_action_smoke.py
+
+      - name: Secret configuration test (credentials stay out of process arguments)
+        run: python3 tests/secret_config_smoke.py

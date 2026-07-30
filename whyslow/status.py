@@ -65,7 +65,7 @@ def render(result):
     if not result["collectors"]:
         lines.append("  ✗ NO COLLECTORS HAVE EVER RUN against this database.")
         lines.append("    Nothing is being recorded. `whyslow` will find nothing.")
-        lines.append("    Start one: whyslow collect-pg --dsn ...")
+        lines.append("    Start one: WHYSLOW_PG_DSN=... whyslow collect-pg")
     for c in result["collectors"]:
         mark = "✗" if c["stale"] else "✓"
         state = "STALE" if c["stale"] else "alive"

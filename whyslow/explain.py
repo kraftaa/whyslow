@@ -434,7 +434,7 @@ def render(result, start_ts, end_ts):
         lines.append("")
         lines.append("Write-lock contention happens on the WRITER and is invisible from a")
         lines.append("reader. Any 'no blocking found' result below is meaningless -- this")
-        lines.append("collector could never have seen it. Repoint --dsn at the cluster")
+        lines.append("collector could never have seen it. Repoint the DSN at the cluster")
         lines.append("WRITER endpoint.")
         lines.append("")
 
