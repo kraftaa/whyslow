@@ -23,15 +23,15 @@ MAINTENANCE_PATTERNS = [
 # Matching from literal string-start would silently miss these, which
 # matters a lot here: this stack is Puma, i.e. very likely Rails.
 _LEADING_COMMENT = re.compile(r"^\s*(/\*.*?\*/\s*|--[^\n]*\n?\s*)")
-_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-_LINE_COMMENT = re.compile(r"--[^\n]*")
-_SIMPLE_DOLLAR_QUOTE = re.compile(r"\$\$.*?\$\$", re.S)
-_TAGGED_DOLLAR_QUOTE = re.compile(
-    r"\$([A-Za-z_][A-Za-z0-9_]*)\$.*?\$\1\$",
-    re.S,
+_DOLLAR_QUOTE_START = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
+_NUMERIC_LITERAL = re.compile(
+    r"(?<![\w.])[-+]?(?:"
+    r"0[xX][0-9A-Fa-f_]+|"
+    r"0[oO][0-7_]+|"
+    r"0[bB][01_]+|"
+    r"(?:\d[\d_]*(?:\.[\d_]*)?|\.[\d_]+)(?:[eE][-+]?\d[\d_]*)?"
+    r")(?![\w.])"
 )
-_SINGLE_QUOTED_LITERAL = re.compile(r"'(?:''|[^'])*'", re.S)
-_NUMERIC_LITERAL = re.compile(r"(?<![\w.])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?![\w.])")
 _WHITESPACE = re.compile(r"\s+")
 MAX_STORED_QUERY_CHARS = 2048
 
@@ -64,14 +64,130 @@ def sanitize_query(query):
     """
     if query is None:
         return None
-    sanitized = _TAGGED_DOLLAR_QUOTE.sub("'?'", query)
-    sanitized = _SIMPLE_DOLLAR_QUOTE.sub("'?'", sanitized)
-    sanitized = _SINGLE_QUOTED_LITERAL.sub("'?'", sanitized)
-    sanitized = _BLOCK_COMMENT.sub(" ", sanitized)
-    sanitized = _LINE_COMMENT.sub(" ", sanitized)
+    sanitized = _redact_sql_text(query)
     sanitized = _NUMERIC_LITERAL.sub("?", sanitized)
     sanitized = _WHITESPACE.sub(" ", sanitized).strip()
     return sanitized[:MAX_STORED_QUERY_CHARS]
+
+
+def _redact_sql_text(query):
+    """Redact PostgreSQL strings/comments with a conservative scanner.
+
+    Regex replacement cannot safely handle E'backslash-escaped quotes',
+    tagged dollar quotes, nested block comments, or malformed input. This
+    scanner preserves SQL structure and quoted identifiers while replacing
+    every literal body with one fixed marker. Unterminated literals/comments
+    consume the rest of the query rather than risk retaining a secret tail.
+    """
+    output = []
+    i = 0
+    length = len(query)
+
+    while i < length:
+        # Line comments.
+        if query.startswith("--", i):
+            newline = query.find("\n", i + 2)
+            output.append(" ")
+            i = length if newline < 0 else newline + 1
+            continue
+
+        # PostgreSQL block comments can nest.
+        if query.startswith("/*", i):
+            depth = 1
+            i += 2
+            while i < length and depth:
+                if query.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif query.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            output.append(" ")
+            continue
+
+        # Dollar-quoted strings: $$...$$ and $tag$...$tag$. Positional
+        # parameters such as $1 deliberately do not match this grammar.
+        dollar = _DOLLAR_QUOTE_START.match(query, i)
+        if dollar:
+            delimiter = dollar.group(0)
+            close = query.find(delimiter, dollar.end())
+            output.append("'?'")
+            i = length if close < 0 else close + len(delimiter)
+            continue
+
+        # Quoted identifiers are structure, not values. Copy them intact,
+        # including doubled quotes and comment-like text inside them.
+        if query[i] == '"':
+            start = i
+            i += 1
+            closed = False
+            while i < length:
+                if query[i] == '"':
+                    if i + 1 < length and query[i + 1] == '"':
+                        i += 2
+                        continue
+                    i += 1
+                    closed = True
+                    break
+                i += 1
+            output.append(query[start:i] if closed else '"?"')
+            continue
+
+        quote_index = None
+        if query[i] == "'":
+            quote_index = i
+        elif (
+            query[i] in "eEbBxXnN"
+            and i + 1 < length
+            and query[i + 1] == "'"
+            and _token_boundary_before(query, i)
+        ):
+            quote_index = i + 1
+        elif (
+            query[i:i + 2].lower() == "u&"
+            and i + 2 < length
+            and query[i + 2] == "'"
+            and _token_boundary_before(query, i)
+        ):
+            quote_index = i + 2
+
+        if quote_index is not None:
+            i = _single_quote_end(query, quote_index)
+            output.append("'?'")
+            continue
+
+        output.append(query[i])
+        i += 1
+
+    return "".join(output)
+
+
+def _token_boundary_before(query, index):
+    if index == 0:
+        return True
+    previous = query[index - 1]
+    return not (previous.isalnum() or previous in "_$")
+
+
+def _single_quote_end(query, quote_index):
+    """Index immediately after a string, or EOF when it is unterminated."""
+    i = quote_index + 1
+    while i < len(query):
+        if query[i] == "\\":
+            # Treat backslash as an escape even for ordinary strings. That
+            # is required for E'' and conservative if a database has
+            # standard_conforming_strings disabled.
+            i += 2
+            continue
+        if query[i] == "'":
+            if i + 1 < len(query) and query[i + 1] == "'":
+                i += 2
+                continue
+            return i + 1
+        i += 1
+    return len(query)
 
 
 SESSIONS_SQL = """

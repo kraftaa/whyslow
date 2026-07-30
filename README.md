@@ -241,6 +241,11 @@ reports ignore targets that had not joined the fleet yet or had already
 been explicitly retired. Run `whyslow retire puma:HOST` during planned
 scale-down; a later heartbeat automatically reactivates that collector.
 
+Stored query evidence is redacted by a PostgreSQL-aware scanner before
+it reaches SQLite. It handles ordinary and escape strings, tagged dollar
+quotes, bit/hex literals, nested comments, and unterminated input; only
+statement structure needed for diagnosis is retained.
+
 ### Round: an unwatched window read as an all-clear
 
 - **The worst bug found in this project, because it produced a confident

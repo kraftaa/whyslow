@@ -95,6 +95,58 @@ assert "account_id = ?" in stored_session_query
 assert label_query(stored_blocking_query) == "reindex"
 assert len(sanitize_query("SELECT '" + ("x" * 5000) + "'")) <= MAX_STORED_QUERY_CHARS
 
+# PostgreSQL-specific literal forms that regex-only redaction commonly gets
+# wrong, especially an escaped quote followed by a sensitive suffix.
+adversarial_query = r"""
+SELECT
+  E'api\'key-secret' AS escaped,
+  U&'unicode-secret-\0061' AS unicode_value,
+  B'101010-secret' AS bits,
+  X'deadbeef-secret' AS hexes,
+  $$simple-dollar-secret$$ AS simple_dollar,
+  $payload$tagged-dollar-secret$payload$ AS tagged_dollar,
+  'doubled-quote-''secret' AS ordinary
+FROM "table--name"
+/* outer-secret /* nested-secret */ still-secret */
+WHERE id = 123456
+  AND hex_id = 0xDEAD_BEEF
+  AND binary_id = 0b1010_0101
+  AND grouped_id = 987_654_321
+"""
+adversarial_sanitized = sanitize_query(adversarial_query)
+for secret in (
+    "key-secret",
+    "unicode-secret",
+    "101010-secret",
+    "deadbeef-secret",
+    "simple-dollar-secret",
+    "tagged-dollar-secret",
+    "doubled-quote",
+    "outer-secret",
+    "nested-secret",
+    "still-secret",
+    "123456",
+    "DEAD_BEEF",
+    "1010_0101",
+    "987_654_321",
+):
+    assert secret not in adversarial_sanitized, (
+        f"PostgreSQL literal/comment leaked through sanitization: {secret}"
+    )
+assert '"table--name"' in adversarial_sanitized, (
+    "comment markers inside a quoted identifier must remain SQL structure"
+)
+assert adversarial_sanitized.count("'?'") == 7, adversarial_sanitized
+
+for malformed in (
+    "SELECT E'unterminated-secret",
+    "SELECT $tag$unterminated-dollar-secret",
+    "SELECT 1 /* unterminated-comment-secret",
+    'SELECT "unterminated-identifier-secret',
+):
+    safe = sanitize_query(malformed)
+    assert "secret" not in safe, f"malformed SQL leaked its sensitive tail: {safe}"
+
 mode = stat.S_IMODE(os.stat(DB_PATH).st_mode)
 assert mode == 0o600, f"SQLite evidence file must be private, got mode {oct(mode)}"
 
