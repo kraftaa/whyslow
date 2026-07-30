@@ -66,6 +66,7 @@ production:
 ```
 
 ```bash
+# Python 3.10+
 pip install -e .
 # Include this extra on the collector host when CloudWatch is enabled:
 pip install -e ".[cloudwatch]"
@@ -98,7 +99,9 @@ Then, after (or during) an incident:
 whyslow --from 11:42 --to 11:47
 ```
 
-Times accept `HH:MM`, `HH:MM:SS`, or raw epoch seconds.
+Times accept ISO-8601 (`2026-07-30T23:55:00Z`), `HH:MM`,
+`HH:MM:SS`, or raw epoch seconds. Clock-only windows automatically roll
+across UTC midnight when `--to` is earlier than `--from`.
 
 ## Root cause vs. blast radius — a real fix, not a hypothetical one
 
@@ -310,14 +313,14 @@ Both resilience bugs were found *because* adding heartbeats forced the
 question "what happens when this collector stops?" -- neither was
 visible from reading the happy path.
 
-### Earlier round: SQLite concurrency audit -- no bug found, one preventive addition made anyway
+### Earlier round: SQLite concurrency and startup locking
 
 Three collector processes (Postgres, Puma, CloudWatch) all write to the
 same SQLite file concurrently, and `whyslow`/`diff` read from
 it while collectors keep running -- worth actually checking rather
 than assuming.
 
-- **Multi-process concurrent writes: tested, no bug.** Forced genuine
+- **Multi-process concurrent writes: tested.** Forced genuine
   simultaneous writes across 3 threads with a synchronization barrier
   and large batches -- zero errors. Confirmed *why*: Python's
   `sqlite3.connect()` defaults to a 5-second busy-timeout, verified by
@@ -331,15 +334,21 @@ than assuming.
   writer than the real collector ever produces, not a real finding.
   Worth stating plainly rather than reporting the scary number: the
   first test was wrong, not the code.
-- **One preventive addition anyway, not a bug fix:** switched to WAL
-  mode (`PRAGMA journal_mode=WAL`), so readers and writers never block
+- **Switched to WAL mode.** `PRAGMA journal_mode=WAL` means readers and writers do not block
   each other at all, rather than relying on busy-timeout retries. This
   wasn't needed to pass any test above, but it directly targets the one
   scenario most relevant to this tool's own purpose: a severe incident
   producing a large write burst (hundreds of session rows in a single
   poll) while someone runs `whyslow` in real time.
   `tests/burst_concurrency_smoke.py` simulates exactly that (300-row
-  bursts x 10, with concurrent reads) and passes clean.
+  bursts x 10, with concurrent reads).
+- **A later Python 3.9 minimum-version run found a first-open race.**
+  Enabling WAL itself needs a write lock; two processes creating the
+  store simultaneously could make one fail immediately with `database
+  is locked`. Initialization now uses a 30-second busy timeout plus
+  bounded retries, and the same burst test covers simultaneous opens.
+  Python 3.9 support was dropped separately because the AWS SDK ended
+  support for it in April 2026; CI now tests Python 3.10 and 3.12.
 
 ### Round before that: IO-bound detection gap, CloudWatch timing bug
 

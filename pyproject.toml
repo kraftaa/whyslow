@@ -3,7 +3,7 @@ name = "whyslow"
 version = "0.1.0"
 description = "Deterministic, evidence-first CLI that reconstructs why web servers slowed down (Aurora Postgres + Puma + CloudWatch)."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = ["psycopg2-binary>=2.9"]
 

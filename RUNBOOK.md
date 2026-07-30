@@ -225,7 +225,8 @@ Then check Puma's `/stats` on a web host for `backlog` and
 
 ```bash
 # capture the evidence into the incident doc while it's still in retention
-whyslow --from 11:42 --to 11:47 > incident-2026-07-28.txt
+whyslow --from 2026-07-28T11:42:00Z --to 2026-07-28T11:47:00Z \
+  > incident-2026-07-28.txt
 ```
 
 Session data ages out after 48h; blocking edges after 30 days.

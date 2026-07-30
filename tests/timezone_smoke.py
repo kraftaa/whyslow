@@ -2,6 +2,9 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from whyslow.cli import parse_time, resolve_window
 
 # Run the actual parse_time() function inside a subprocess with a
 # different local timezone (America/Los_Angeles), to prove it no longer
@@ -32,4 +35,17 @@ assert diff_hours < 0.02, (
     f"parse_time() is still timezone-sensitive: {diff_hours:.2f}h off "
     f"when run under TZ=America/Los_Angeles"
 )
-print("\nPASS: parse_time() interprets HH:MM as UTC regardless of local system timezone")
+
+iso = "2026-07-30T23:55:00Z"
+expected_iso = datetime(2026, 7, 30, 23, 55, tzinfo=timezone.utc).timestamp()
+assert parse_time(iso) == expected_iso
+assert parse_time("2026-07-30T23:55:00") == expected_iso, (
+    "offset-free ISO timestamps should use the documented UTC default"
+)
+
+start, end = resolve_window(
+    SimpleNamespace(last=None, from_="23:55", to="00:05")
+)
+assert end - start == 600, "clock-only windows should roll across UTC midnight"
+
+print("\nPASS: clock and ISO timestamps are UTC-safe, including midnight rollover")

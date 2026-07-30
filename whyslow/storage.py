@@ -109,19 +109,30 @@ class Store:
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path))
+        self.conn = sqlite3.connect(str(self.path), timeout=30)
+        self.conn.execute("PRAGMA busy_timeout=30000;")
         # WAL mode: readers and writers never block each other, unlike the
-        # default rollback-journal mode. Not fixing an observed bug --
-        # concurrent multi-process writes and realistic read-while-write
-        # both tested clean under the default settings (Python's sqlite3
-        # module already retries for 5s by default). This is preventive,
-        # for the one untested worst case: a severe incident producing a
-        # large burst of writes in a single poll, with `whyslow`
-        # run concurrently by someone investigating in real time.
-        self.conn.execute("PRAGMA journal_mode=WAL;")
-        self.conn.executescript(SCHEMA)
+        # default rollback-journal mode. Enabling WAL itself needs a write
+        # lock: simultaneous first opens exposed a startup race on Python
+        # 3.9 where one process failed immediately with "database is locked".
+        # Retry all initialization lock conflicts within the same 30-second
+        # budget used for ordinary SQLite writes.
+        self._retry_locked(
+            lambda: self.conn.execute("PRAGMA journal_mode=WAL;").fetchone()
+        )
+        self._retry_locked(lambda: self.conn.executescript(SCHEMA))
         self._migrate()
         self.conn.commit()
+
+    def _retry_locked(self, operation):
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                return operation()
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
 
     def _migrate(self):
         """Add columns introduced after a database was first created.
@@ -141,7 +152,17 @@ class Store:
             }
             for column, coltype in columns.items():
                 if column not in existing:
-                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+                    try:
+                        self._retry_locked(
+                            lambda: self.conn.execute(
+                                f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"
+                            )
+                        )
+                    except sqlite3.OperationalError as exc:
+                        # Another process may have completed the same
+                        # migration while this connection waited.
+                        if "duplicate column" not in str(exc).lower():
+                            raise
         self.conn.commit()
 
     # ---- writes (collectors call these) ----

@@ -26,7 +26,31 @@ def parse_duration(s):
         value = float(s[:-1])
     except ValueError:
         raise SystemExit(f"could not parse duration: {s!r} (use e.g. 15m, 2h, 90s, 1d)")
+    if value <= 0:
+        raise SystemExit(f"duration must be greater than zero: {s!r}")
     return value * DURATION_UNITS[unit]
+
+
+def _is_clock_time(s):
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            datetime.strptime(s, fmt)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def resolve_explicit_window(from_value, to_value):
+    """Parse an explicit window, treating a clock-only end before its start
+    as crossing UTC midnight."""
+    start_ts = parse_time(from_value)
+    end_ts = parse_time(to_value)
+    if end_ts <= start_ts and _is_clock_time(from_value) and _is_clock_time(to_value):
+        end_ts += 86400
+    if end_ts <= start_ts:
+        raise SystemExit("window end must be after window start")
+    return start_ts, end_ts
 
 
 def resolve_window(args):
@@ -36,11 +60,12 @@ def resolve_window(args):
         return end_ts - parse_duration(args.last), end_ts
     if not args.from_ or not args.to:
         raise SystemExit("specify either --last DURATION (e.g. --last 15m) or both --from and --to")
-    return parse_time(args.from_), parse_time(args.to)
+    return resolve_explicit_window(args.from_, args.to)
 
 
 def parse_time(s):
-    """Accepts HH:MM, HH:MM:SS, or raw epoch seconds. HH:MM(:SS) is always
+    """Accepts ISO-8601, HH:MM, HH:MM:SS, or raw epoch seconds.
+    Clock-only values are always
     interpreted as UTC -- collectors store time.time() (UTC epoch), and an
     engineer reading a timestamp off any dashboard (CloudWatch, logs) is
     reading UTC too. Using local system time here was a real, silent bug:
@@ -51,6 +76,19 @@ def parse_time(s):
         return float(s)
     except ValueError:
         pass
+
+    # ISO-8601 is the unambiguous form for historical and cross-date
+    # incidents. A missing offset is interpreted as UTC, matching the
+    # clock-only behavior and the collector's epoch timestamps.
+    normalized = s[:-1] + "+00:00" if s.endswith(("Z", "z")) else s
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except ValueError:
+        pass
+
     today = datetime.now(timezone.utc).date()
     for fmt in ("%H:%M:%S", "%H:%M"):
         try:
@@ -60,7 +98,7 @@ def parse_time(s):
             continue
     raise SystemExit(
         f"could not parse time: {s!r} -- interpreted as UTC; "
-        f"use HH:MM, HH:MM:SS, or epoch seconds"
+        f"use ISO-8601, HH:MM, HH:MM:SS, or epoch seconds"
     )
 
 
@@ -139,8 +177,10 @@ def cmd_diff(args):
             raise SystemExit(
                 "specify either --baseline-last DURATION or both --baseline-from and --baseline-to"
             )
-        baseline_start = parse_time(args.baseline_from)
-        baseline_end = parse_time(args.baseline_to)
+        baseline_start, baseline_end = resolve_explicit_window(
+            args.baseline_from,
+            args.baseline_to,
+        )
 
     result = diff_mod.diff(store, baseline_start, baseline_end, incident_start, incident_end)
     print(diff_mod.render(result))
@@ -185,8 +225,12 @@ def main(argv=None):
     p = sub.add_parser("explain", help="reconstruct a timeline + evidence for a window")
     p.add_argument("--last", metavar="DURATION",
                     help="window ending now, e.g. 15m, 2h, 90s (alternative to --from/--to)")
-    p.add_argument("--from", dest="from_", help="window start (HH:MM UTC, HH:MM:SS UTC, or epoch)")
-    p.add_argument("--to", help="window end (HH:MM UTC, HH:MM:SS UTC, or epoch)")
+    p.add_argument(
+        "--from",
+        dest="from_",
+        help="window start (ISO-8601, HH:MM UTC, or epoch)",
+    )
+    p.add_argument("--to", help="window end (ISO-8601, HH:MM UTC, or epoch)")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.set_defaults(func=cmd_explain)
 
@@ -214,7 +258,7 @@ def main(argv=None):
     p.add_argument("--source", required=True, help="e.g. deploy, dbt, airflow, manual")
     p.add_argument("--kind", help="e.g. 'v1.2.3 released', 'nightly_rollup started'")
     p.add_argument("--payload", help="optional extra detail (sha, job id, ...)")
-    p.add_argument("--at", help="timestamp (HH:MM UTC or epoch); defaults to now")
+    p.add_argument("--at", help="timestamp (ISO-8601, HH:MM UTC, or epoch); defaults to now")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.set_defaults(func=cmd_event)
 
