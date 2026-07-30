@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS collector_heartbeats (
     collector TEXT PRIMARY KEY,
     ts REAL NOT NULL,
     detail TEXT,
+    -- The collector's configured cadence. Status uses this rather than
+    -- assuming every Postgres/Puma collector runs at the default 1 second.
+    expected_interval REAL,
     -- 'primary' | 'replica' | NULL. On Aurora, pointing the collector at
     -- the cluster READER endpoint is the safer-looking choice (read-only,
     -- no write risk) and is the wrong one: write-lock contention happens
@@ -127,7 +130,10 @@ class Store:
         first query referencing a new column."""
         expected = {
             "blocking_edges": {"ended_ts": "REAL"},
-            "collector_heartbeats": {"instance_role": "TEXT"},
+            "collector_heartbeats": {
+                "instance_role": "TEXT",
+                "expected_interval": "REAL",
+            },
         }
         for table, columns in expected.items():
             existing = {
@@ -274,14 +280,23 @@ class Store:
             (start_ts, end_ts),
         ).fetchall()
 
-    def write_heartbeat(self, collector, detail=None, ts=None, instance_role=None):
+    def write_heartbeat(
+        self,
+        collector,
+        detail=None,
+        ts=None,
+        instance_role=None,
+        expected_interval=None,
+    ):
         ts = ts or time.time()
         self.conn.execute(
-            "INSERT INTO collector_heartbeats (collector, ts, detail, instance_role) "
-            "VALUES (?,?,?,?) "
+            "INSERT INTO collector_heartbeats "
+            "(collector, ts, detail, instance_role, expected_interval) "
+            "VALUES (?,?,?,?,?) "
             "ON CONFLICT(collector) DO UPDATE SET ts=excluded.ts, detail=excluded.detail, "
-            "instance_role=excluded.instance_role",
-            (collector, ts, detail, instance_role),
+            "instance_role=excluded.instance_role, "
+            "expected_interval=excluded.expected_interval",
+            (collector, ts, detail, instance_role, expected_interval),
         )
         # Also record historical coverage so past gaps stay visible.
         self.conn.execute(
@@ -322,7 +337,8 @@ class Store:
 
     def get_heartbeats(self):
         return self.conn.execute(
-            "SELECT collector, ts, detail, instance_role FROM collector_heartbeats "
+            "SELECT collector, ts, detail, instance_role, expected_interval "
+            "FROM collector_heartbeats "
             "ORDER BY collector"
         ).fetchall()
 

@@ -72,6 +72,8 @@ root = Path(__file__).resolve().parents[1]
 pg_unit = (root / "deploy" / "whyslow-collect-pg.service").read_text()
 puma_unit = (root / "deploy" / "whyslow-collect-puma@.service").read_text()
 cw_unit = (root / "deploy" / "whyslow-collect-cw.service").read_text()
+prune_unit = (root / "deploy" / "whyslow-prune.service").read_text()
+prune_timer = (root / "deploy" / "whyslow-prune.timer").read_text()
 
 assert "--dsn" not in pg_unit, "systemd must not expose the DSN in process arguments"
 assert "--token" not in puma_unit, "systemd must not expose the Puma token in process arguments"
@@ -80,5 +82,7 @@ for unit in (pg_unit, puma_unit, cw_unit):
     assert "--db /var/lib/whyslow/store.sqlite3" in unit, (
         "all collectors must write to the same central SQLite store"
     )
+assert "whyslow prune --db /var/lib/whyslow/store.sqlite3" in prune_unit
+assert "OnCalendar=hourly" in prune_timer
 
 print("PASS: collector secrets come from the environment and stay out of systemd process arguments")

@@ -39,11 +39,17 @@ def status(store, now=None):
     coverage = store.data_coverage()
 
     collectors = []
-    for collector, ts, detail, instance_role in heartbeats:
+    for collector, ts, detail, instance_role, expected_interval in heartbeats:
         age = now - ts
-        # Postgres/Puma default to 1s, CloudWatch to 60s -- use the
-        # conservative fallback rather than guessing per collector.
-        expected = 1 if (collector.startswith("puma") or collector == "postgres") else DEFAULT_EXPECTED_INTERVAL
+        # New collectors record their actual cadence. Keep role-based
+        # fallbacks for databases created by an older version.
+        expected = expected_interval
+        if expected is None or expected <= 0:
+            expected = (
+                1
+                if (collector.startswith("puma") or collector == "postgres")
+                else DEFAULT_EXPECTED_INTERVAL
+            )
         stale = age > (expected * STALE_MULTIPLIER)
         collectors.append({
             "name": collector,
@@ -52,6 +58,7 @@ def status(store, now=None):
             "stale": stale,
             "detail": detail,
             "instance_role": instance_role,
+            "expected_interval": expected,
         })
 
     return {"collectors": collectors, "coverage": coverage, "now": now}

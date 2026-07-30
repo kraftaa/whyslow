@@ -72,6 +72,7 @@ class CloudWatchCollector:
                 self.store.write_heartbeat(
                     "cloudwatch",
                     detail=f"metrics={sorted(results.keys())}" if results else "no datapoints",
+                    expected_interval=self.interval,
                 )
                 consecutive_failures = 0
                 print(f"[whyslow] {results}")

@@ -29,8 +29,14 @@ whyslow collect-cw --db-instance-id my-aurora-cluster \
 
 Do not run these against separate local stores on each web server: the
 tool cannot correlate timelines split across files. Use the systemd units
-in `deploy/` on the collector host so they survive reboots. Then verify
-it's actually working, and check again occasionally:
+in `deploy/` on the collector host so they survive reboots. Enable the
+retention timer too:
+
+```bash
+systemctl enable --now whyslow-prune.timer
+```
+
+Then verify it's actually working, and check again occasionally:
 
 ```bash
 whyslow status     # exits non-zero if any collector is stale

@@ -326,7 +326,7 @@ def explain(store, start_ts, end_ts):
     # A collector on a replica cannot see write-lock contention at all, so
     # "no blocking found" from reader data is as misleading as no data.
     db_instance_role = None
-    for collector, ts, detail, instance_role in store.get_heartbeats():
+    for collector, ts, detail, instance_role, expected_interval in store.get_heartbeats():
         if collector == "postgres":
             db_instance_role = instance_role
 

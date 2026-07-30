@@ -201,6 +201,7 @@ class PostgresCollector:
                         "postgres",
                         detail=f"interval={self.interval}s",
                         instance_role=instance_role,
+                        expected_interval=self.interval,
                     )
                     if n_sessions or n_edges:
                         print(f"[whyslow] +{n_sessions} session rows, +{n_edges} blocking edges")

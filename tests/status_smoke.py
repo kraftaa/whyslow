@@ -34,12 +34,31 @@ assert "alive" in out
 assert "NORMAL" in out, "should explain that empty tables + live collector is expected"
 store.close()
 
-# --- Case 3: collector died three weeks ago ---
+# --- Case 3: custom interval must drive staleness ---
 store = Store(DB_PATH)
-store.write_heartbeat("postgres", detail="interval=1.0s", ts=now - 21 * 86400)
+store.write_heartbeat(
+    "postgres",
+    detail="interval=30s",
+    expected_interval=30,
+    ts=now - 20,
+)
+result = status_mod.status(store, now=now)
+pg = [c for c in result["collectors"] if c["name"] == "postgres"][0]
+assert not pg["stale"], "a collector inside 10x its configured interval is alive"
+assert pg["expected_interval"] == 30
+store.close()
+
+# --- Case 4: collector died three weeks ago ---
+store = Store(DB_PATH)
+store.write_heartbeat(
+    "postgres",
+    detail="interval=1.0s",
+    expected_interval=1,
+    ts=now - 21 * 86400,
+)
 result = status_mod.status(store, now=now)
 out = status_mod.render(result)
-print("\n=== Case 3: collector died three weeks ago ===")
+print("\n=== Case 4: collector died three weeks ago ===")
 print(out)
 pg = [c for c in result["collectors"] if c["name"] == "postgres"][0]
 assert pg["stale"], "a three-week-old heartbeat must be flagged stale"

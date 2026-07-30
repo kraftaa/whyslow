@@ -1,0 +1,19 @@
+[Unit]
+Description=Prune expired whyslow incident data
+Documentation=https://github.com/kraftaa/whyslow
+
+[Service]
+Type=oneshot
+User=whyslow
+Group=whyslow
+ExecStart=/usr/local/bin/whyslow prune --db /var/lib/whyslow/store.sqlite3
+
+StateDirectory=whyslow
+StateDirectoryMode=0750
+MemoryMax=512M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/whyslow

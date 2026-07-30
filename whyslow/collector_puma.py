@@ -73,6 +73,7 @@ class PumaCollector:
                 self.store.write_heartbeat(
                     f"puma:{self.host_name}",
                     detail=f"backlog={backlog} pool_capacity={pool_capacity}",
+                    expected_interval=self.interval,
                 )
                 if consecutive_failures:
                     print(f"[whyslow] {self.host_name}: recovered after "

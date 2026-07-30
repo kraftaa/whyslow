@@ -480,7 +480,16 @@ whyslow diff --last 15m --baseline-last 15m   # baseline = the 15m just before
 `deploy/` contains systemd units for Postgres and CloudWatch plus a
 templated Puma unit (`whyslow-collect-puma@web-3`). Run all of them on
 the same collector host. Each Puma instance reads its target URL and
-token from `/etc/whyslow/puma/<host>.env`. The units use
+token from `/etc/whyslow/puma/<host>.env`.
+
+Enable the independent retention timer as well:
+
+```bash
+systemctl enable --now whyslow-prune.timer
+```
+
+This runs `whyslow prune` hourly, so expired data is removed even if the
+Postgres collector is unavailable. The collector units use
 `Restart=always` with `StartLimitIntervalSec=0` — a collector that gives
 up retrying is a collector that silently isn't there when it matters —
 and read credentials from an `EnvironmentFile` rather than command-line
@@ -565,10 +574,14 @@ appeared and blocking edges going 0 -> 1.
 
 Four gaps closed after an audit, not speculative additions:
 
-- **Retention/pruning is now implemented and tested** (`Store.prune()`,
-  `tests/prune_smoke.py`) — session/Puma data ages out after 48h,
-  blocking edges and CloudWatch metrics after 30 days, matching the
-  policy this README always claimed but never enforced.
+- **Retention/pruning is implemented and tested** (`Store.prune()`,
+  `whyslow prune`, and `tests/prune_smoke.py`) — session/Puma data ages
+  out after 48h, blocking edges and CloudWatch metrics after 30 days.
+  The systemd timer runs independently of collector health.
+- **Heartbeat staleness uses each collector's configured interval.**
+  A collector intentionally running every 30 seconds no longer gets
+  judged against the one-second default; older stores retain safe
+  role-based fallbacks.
 - **The Postgres collector now reconnects with exponential backoff**
   instead of dying if the connection drops mid-poll — plausible
   exactly during a severe incident, which is the one moment this tool

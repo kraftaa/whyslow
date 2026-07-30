@@ -1,0 +1,11 @@
+[Unit]
+Description=Prune expired whyslow incident data hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=whyslow-prune.service
+
+[Install]
+WantedBy=timers.target

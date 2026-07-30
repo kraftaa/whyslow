@@ -22,16 +22,29 @@ CREATE TABLE blocking_edges (
     blocking_usename TEXT,
     blocking_query TEXT
 );
+CREATE TABLE collector_heartbeats (
+    collector TEXT PRIMARY KEY,
+    ts REAL NOT NULL,
+    detail TEXT
+);
 """)
 old_conn.execute(
     "INSERT INTO blocking_edges VALUES (?,?,?,?,?,?,?)",
     (time.time(), 512, "web-3", 210, "batch", "analytics_role", "REINDEX TABLE orders"),
+)
+old_conn.execute(
+    "INSERT INTO collector_heartbeats VALUES (?,?,?)",
+    ("postgres", time.time(), "interval=1.0s"),
 )
 old_conn.commit()
 
 cols_before = {r[1] for r in old_conn.execute("PRAGMA table_info(blocking_edges)").fetchall()}
 print(f"columns before upgrade: {sorted(cols_before)}")
 assert "ended_ts" not in cols_before
+heartbeat_cols_before = {
+    r[1] for r in old_conn.execute("PRAGMA table_info(collector_heartbeats)").fetchall()
+}
+assert "expected_interval" not in heartbeat_cols_before
 old_conn.close()
 
 # Opening with the current Store must migrate in place, not crash and not
@@ -41,6 +54,11 @@ store = Store(DB_PATH)
 cols_after = {r[1] for r in store.conn.execute("PRAGMA table_info(blocking_edges)").fetchall()}
 print(f"columns after upgrade:  {sorted(cols_after)}")
 assert "ended_ts" in cols_after, "migration must add the ended_ts column"
+heartbeat_cols_after = {
+    r[1] for r in store.conn.execute("PRAGMA table_info(collector_heartbeats)").fetchall()
+}
+assert "expected_interval" in heartbeat_cols_after
+assert "instance_role" in heartbeat_cols_after
 
 rows = store.blocking_edges_in(0, time.time() + 1)
 print(f"pre-existing rows preserved: {len(rows)}")
@@ -59,6 +77,10 @@ store.close()
 store2 = Store(DB_PATH)
 cols_again = {r[1] for r in store2.conn.execute("PRAGMA table_info(blocking_edges)").fetchall()}
 assert cols_again == cols_after, "migration must be idempotent"
+heartbeat_cols_again = {
+    r[1] for r in store2.conn.execute("PRAGMA table_info(collector_heartbeats)").fetchall()
+}
+assert heartbeat_cols_again == heartbeat_cols_after
 store2.close()
 
 print("\nPASS: an existing pre-ended_ts database migrates in place, keeps its data, "

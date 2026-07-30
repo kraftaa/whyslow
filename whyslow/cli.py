@@ -116,6 +116,14 @@ def cmd_status(args):
         sys.exit(1)
 
 
+def cmd_prune(args):
+    store = Store(args.db)
+    deleted = store.prune()
+    store.close()
+    summary = ", ".join(f"{table}={count}" for table, count in sorted(deleted.items()))
+    print(f"[whyslow] pruned old rows: {summary}")
+
+
 def cmd_diff(args):
     store = Store(args.db)
     incident_start, incident_end = resolve_window(args)
@@ -185,6 +193,10 @@ def main(argv=None):
     p = sub.add_parser("status", help="is anything actually being collected right now?")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("prune", help="delete rows past their retention windows")
+    p.add_argument("--db", default=".whyslow/store.sqlite3")
+    p.set_defaults(func=cmd_prune)
 
     p = sub.add_parser("diff", help="compare a healthy baseline window against an incident window")
     p.add_argument("--last", metavar="DURATION",
