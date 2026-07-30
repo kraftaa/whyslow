@@ -27,6 +27,7 @@ COOCCURRENCE_WINDOW_SECONDS = 10   # "close in time" means within this many seco
 EVENT_COOCCURRENCE_WINDOW_SECONDS = 60
 CPU_ALERT_THRESHOLD = 85.0        # CloudWatch CPUUtilization %
 RESOURCE_SESSION_SPIKE_COUNT = 3  # distinct cpu- or io-category sessions counts as a spike
+CLOUDWATCH_PERIOD_SECONDS = 60    # metric interval represented by each Average datapoint
 
 # The two contributor categories genuinely have different numbers of
 # checkable signals, so confidence is a ratio, not a hardcoded /3.
@@ -52,6 +53,20 @@ def _near(ts_a, ts_b, window=COOCCURRENCE_WINDOW_SECONDS):
     return abs(ts_a - ts_b) <= window
 
 
+def _timestamp_near_spike(ts, spike, window=COOCCURRENCE_WINDOW_SECONDS):
+    """Whether a point falls inside or close to a session-spike interval."""
+    return spike["start_ts"] - window <= ts <= spike["end_ts"] + window
+
+
+def _cloudwatch_overlaps_spike(metric_ts, spike):
+    """CloudWatch timestamps mark the start of a 60-second Average period."""
+    metric_end = metric_ts + CLOUDWATCH_PERIOD_SECONDS
+    return (
+        metric_ts <= spike["end_ts"] + COOCCURRENCE_WINDOW_SECONDS
+        and metric_end >= spike["start_ts"] - COOCCURRENCE_WINDOW_SECONDS
+    )
+
+
 def build_timeline(store, start_ts, end_ts):
     """Step 1 + 2: fetch everything in the window, merge and sort by time.
     Every entry here is a direct rendering of one stored row -- nothing
@@ -67,6 +82,7 @@ def build_timeline(store, start_ts, end_ts):
             first_ts,
             f"session activity: {category}={n} change(s) this minute",
             {"kind": "session", "category": category, "count": n,
+             "minute_bucket": minute_bucket,
              "first_ts": first_ts, "last_ts": last_ts},
         ))
 
@@ -114,16 +130,19 @@ def find_blocking_candidates(timeline):
 
 def find_resource_candidates(timeline):
     """Step 3 (resource-contention path): 'cpu' or 'io' category sessions,
-    grouped -- sustained volume is the signal, not any single row."""
-    buckets = defaultdict(list)
-    counts = defaultdict(int)
+    grouped into real per-minute spikes. Counts spread across a wide incident
+    window are not a cluster and must not be combined into one."""
+    spikes = defaultdict(list)
     for ts, _, meta in timeline:
         if meta.get("kind") == "session" and meta.get("category") in ("cpu", "io"):
-            # Sessions arrive pre-aggregated per minute, so carry the count
-            # separately from the timestamps used for proximity checks.
-            buckets[meta["category"]].append(ts)
-            counts[meta["category"]] += meta.get("count", 1)
-    return {"timestamps": dict(buckets), "counts": dict(counts)}
+            count = meta.get("count", 1)
+            if count >= RESOURCE_SESSION_SPIKE_COUNT:
+                spikes[meta["category"]].append({
+                    "count": count,
+                    "start_ts": meta.get("first_ts", ts),
+                    "end_ts": meta.get("last_ts", ts),
+                })
+    return {"spikes": dict(spikes)}
 
 
 def check_blocking_signals(candidate_key, candidate_data, timeline):
@@ -192,24 +211,32 @@ def check_resource_signals(timeline, resource_buckets):
     pressure) despite the contributor being labeled "CPU/IO"."""
     signals = []
 
-    timestamps = resource_buckets.get("timestamps", {})
-    counts = resource_buckets.get("counts", {})
-    cpu_ts_list = timestamps.get("cpu", [])
-    io_ts_list = timestamps.get("io", [])
-    cpu_count = counts.get("cpu", 0)
-    io_count = counts.get("io", 0)
+    spikes = resource_buckets.get("spikes", {})
+    cpu_spikes = spikes.get("cpu", [])
+    io_spikes = spikes.get("io", [])
 
-    if cpu_count >= RESOURCE_SESSION_SPIKE_COUNT:
-        signals.append(f"{cpu_count} CPU-bound session changes (>= {RESOURCE_SESSION_SPIKE_COUNT})")
-    if io_count >= RESOURCE_SESSION_SPIKE_COUNT:
-        signals.append(f"{io_count} IO-bound session changes (>= {RESOURCE_SESSION_SPIKE_COUNT})")
+    if cpu_spikes:
+        peak = max(s["count"] for s in cpu_spikes)
+        signals.append(
+            f"CPU-bound session spike: {peak} change(s) in one minute "
+            f"(>= {RESOURCE_SESSION_SPIKE_COUNT})"
+        )
+    if io_spikes:
+        peak = max(s["count"] for s in io_spikes)
+        signals.append(
+            f"IO-bound session spike: {peak} change(s) in one minute "
+            f"(>= {RESOURCE_SESSION_SPIKE_COUNT})"
+        )
 
-    resource_ts_list = cpu_ts_list + io_ts_list
+    resource_spikes = cpu_spikes + io_spikes
 
     cw_alert = None
     for ts, _, meta in timeline:
         if meta.get("kind") == "cloudwatch" and meta.get("metric") == "CPUUtilization":
-            if meta["value"] >= CPU_ALERT_THRESHOLD:
+            if (
+                meta["value"] >= CPU_ALERT_THRESHOLD
+                and any(_cloudwatch_overlaps_spike(ts, spike) for spike in resource_spikes)
+            ):
                 cw_alert = (ts, meta["value"])
                 break
     if cw_alert:
@@ -218,7 +245,7 @@ def check_resource_signals(timeline, resource_buckets):
     backlog_hit = None
     for ts, _, meta in timeline:
         if meta.get("kind") == "puma" and (meta.get("backlog") or 0) > 0:
-            if resource_ts_list and any(_near(ts, c) for c in resource_ts_list):
+            if any(_timestamp_near_spike(ts, spike) for spike in resource_spikes):
                 backlog_hit = (ts, meta["host"])
                 break
     if backlog_hit:
@@ -226,7 +253,12 @@ def check_resource_signals(timeline, resource_buckets):
 
     # Fifth signal: an external event (deploy, dbt/Airflow job) close in
     # time -- the spec's "overlaps a dbt run window" check, finally wired up.
-    event_hit = _nearest_event(timeline, resource_ts_list)
+    resource_reference_ts = [
+        ts
+        for spike in resource_spikes
+        for ts in (spike["start_ts"], spike["end_ts"])
+    ]
+    event_hit = _nearest_event(timeline, resource_reference_ts)
     if event_hit:
         signals.append(f"external event nearby: {event_hit}")
 

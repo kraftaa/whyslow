@@ -127,7 +127,26 @@ and `whyslow diff` both surface this count alongside the root-cause
 edges, not instead of them. Two cheap, honest numbers instead of one
 expensive, misleading one.
 
-## Bugs found by auditing across ten rounds, not by guessing
+## Bugs found by repeated audits, not by guessing
+
+### Most recent round: wide windows combined unrelated evidence
+
+Resource pressure used to be counted across the entire requested window.
+Three isolated CPU session changes in three different minutes therefore
+became one "spike," and any high CloudWatch CPU value anywhere in the
+window counted as corroboration. A wide investigation could combine two
+unrelated events into one confident-looking explanation.
+
+Detection now requires at least three CPU- or IO-category changes in the
+same minute. Puma, events, and CloudWatch evidence must overlap that spike;
+CloudWatch uses the actual 60-second measurement interval rather than the
+time the delayed datapoint happened to be collected.
+
+The CloudWatch collector also preserves each datapoint's real timestamp
+and deduplicates overlapping publication-lag queries. The temporal
+regression test includes both counterexamples: scattered activity never
+forms a candidate, and a distant high-CPU metric never corroborates a
+nearby spike.
 
 ### Most recent round: every test used unrealistically tiny data
 

@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS cloudwatch_metrics (
     value REAL
 );
 CREATE INDEX IF NOT EXISTS idx_cloudwatch_metrics_ts ON cloudwatch_metrics(ts);
+CREATE INDEX IF NOT EXISTS idx_cloudwatch_metrics_metric_ts
+    ON cloudwatch_metrics(metric, ts);
 
 CREATE TABLE IF NOT EXISTS events (
     ts REAL NOT NULL,
@@ -169,6 +171,13 @@ class Store:
 
     def write_cloudwatch_metric(self, metric, value, ts=None):
         ts = ts or time.time()
+        # CloudWatch queries overlap to tolerate publication lag, so the
+        # same datapoint can be returned by consecutive polls. Replace any
+        # prior copy instead of growing duplicates or counting it twice.
+        self.conn.execute(
+            "DELETE FROM cloudwatch_metrics WHERE metric = ? AND ts = ?",
+            (metric, ts),
+        )
         self.conn.execute(
             "INSERT INTO cloudwatch_metrics (ts, metric, value) VALUES (?,?,?)",
             (ts, metric, value),

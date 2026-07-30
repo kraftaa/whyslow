@@ -68,6 +68,9 @@ jobs:
       - name: IO-bound resource-contention regression test
         run: python3 tests/io_contention_smoke.py
 
+      - name: Temporal resource-clustering regression test
+        run: python3 tests/temporal_resource_smoke.py
+
       - name: CloudWatch collector test (mocked via moto)
         run: python3 tests/cloudwatch_smoke.py
 

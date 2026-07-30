@@ -49,8 +49,17 @@ class CloudWatchCollector:
             )
             points = sorted(resp.get("Datapoints", []), key=lambda p: p["Timestamp"])
             if points:
-                value = points[-1]["Average"]
-                self.store.write_cloudwatch_metric(metric, value)
+                point = points[-1]
+                value = point["Average"]
+                # The query intentionally looks behind "now" to tolerate
+                # CloudWatch publication lag. Recording collection time here
+                # shifted evidence by minutes and broke 10-second incident
+                # correlation. Preserve the measurement's real timestamp.
+                self.store.write_cloudwatch_metric(
+                    metric,
+                    value,
+                    ts=point["Timestamp"].timestamp(),
+                )
                 results[metric] = value
         return results
 

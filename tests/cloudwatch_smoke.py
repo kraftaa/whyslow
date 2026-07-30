@@ -56,13 +56,23 @@ def run():
     assert results.get("CPUUtilization") == 91.0, f"expected CPUUtilization=91.0, got {results}"
     assert results.get("DatabaseConnections") == 104.0, f"expected DatabaseConnections=104.0, got {results}"
 
+    # Poll the same overlapping window again. Publication-lag buffering
+    # deliberately causes overlap, but one CloudWatch datapoint must still
+    # produce only one stored row.
+    collector.poll_once()
+
     rows = store.cloudwatch_metrics_in(0, time.time() + 1)
     metrics_stored = {m: v for _, m, v in rows}
     assert metrics_stored.get("CPUUtilization") == 91.0
     assert metrics_stored.get("DatabaseConnections") == 104.0
+    assert len(rows) == 2, f"overlapping polls duplicated CloudWatch rows: {rows}"
+    for stored_ts, _, _ in rows:
+        assert abs(stored_ts - metric_time.timestamp()) < 1, (
+            "must store the CloudWatch measurement timestamp, not collection time"
+        )
     store.close()
 
-    print("\nPASS: CloudWatch collector correctly fetches and stores real metric data (mocked via moto)")
+    print("\nPASS: CloudWatch metrics retain real timestamps and overlapping polls deduplicate")
 
 
 run()
