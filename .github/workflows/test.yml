@@ -1,0 +1,97 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -e ".[test]"
+
+      - name: Create test table
+        run: |
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c \
+            "CREATE TABLE orders (id int primary key, val int); INSERT INTO orders VALUES (1, 0);"
+
+      - name: Live Postgres blocking-chain smoke test
+        run: python3 tests/live_blocking_smoke.py
+
+      - name: Synthetic REINDEX (3-signal) smoke test
+        run: python3 tests/synthetic_reindex_smoke.py
+
+      - name: whyslow diff smoke test
+        run: python3 tests/diff_smoke.py
+
+      - name: Puma collector smoke test (single + clustered mode)
+        run: python3 tests/puma_smoke.py
+
+      - name: Retention/pruning smoke test
+        run: python3 tests/prune_smoke.py
+
+      - name: Timezone regression test
+        run: python3 tests/timezone_smoke.py
+
+      - name: Query-label (Rails/ActiveRecord comment) regression test
+        run: python3 tests/query_label_smoke.py
+
+      - name: IO-bound resource-contention regression test
+        run: python3 tests/io_contention_smoke.py
+
+      - name: CloudWatch collector test (mocked via moto)
+        run: python3 tests/cloudwatch_smoke.py
+
+      - name: Concurrent read/write smoke test (explain running while a collector writes)
+        run: python3 tests/read_write_concurrency_smoke.py
+
+      - name: Burst-write concurrency smoke test (severe-incident-scale writes + concurrent reads)
+        run: python3 tests/burst_concurrency_smoke.py
+
+      - name: Collector liveness / status smoke test
+        run: python3 tests/status_smoke.py
+
+      - name: End-to-end CLI test (status, --last windows, diff --baseline-last)
+        run: python3 tests/cli_e2e_smoke.py
+
+      - name: Event correlation + signal-count regression test
+        run: python3 tests/event_smoke.py
+
+      - name: Blocking duration + mid-incident-restart regression test
+        run: python3 tests/duration_smoke.py
+
+      - name: Schema migration test (pre-ended_ts database upgrades in place)
+        run: python3 tests/migration_smoke.py
+
+      - name: Coverage-gap + live-duration test (unwatched window must never read as all-clear)
+        run: python3 tests/coverage_smoke.py
+
+      - name: Aurora reader-endpoint misconfiguration test
+        run: python3 tests/replica_smoke.py
+
+      - name: Scale test (48h window must not OOM or produce unreadable output)
+        run: python3 tests/scale_bench.py
+
+      - name: Default-action test (`whyslow --last 15m` routes to explain)
+        run: python3 tests/default_action_smoke.py

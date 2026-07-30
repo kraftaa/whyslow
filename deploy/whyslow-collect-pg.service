@@ -1,0 +1,49 @@
+[Unit]
+Description=whyslow Postgres collector
+Documentation=https://github.com/kraftaa/whyslow
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=whyslow
+Group=whyslow
+
+# The DSN contains a password -- keep it in a root-owned 0600 environment
+# file, not in this unit and not in the process arguments (where it would
+# be visible in `ps` output to every user on the box).
+EnvironmentFile=/etc/whyslow/postgres.env
+ExecStart=/usr/local/bin/whyslow collect-pg \
+    --dsn ${WHYSLOW_PG_DSN} \
+    --db /var/lib/whyslow/store.sqlite3 \
+    --interval 1.0
+
+# The whole point of this tool is being alive BEFORE an incident.
+# Always restart, and never give up -- a collector that stops retrying
+# is a collector that silently isn't there when it matters.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+StateDirectory=whyslow
+StateDirectoryMode=0750
+
+# Least privilege: this only needs to read a database over the network
+# and write one SQLite file.
+# Hard memory ceiling. A wide `explain` window used to load every session
+# row into Python (733 MB for 48h); that is fixed by SQL-level
+# aggregation, but a ceiling means a future regression gets killed here
+# instead of taking the host down.
+MemoryMax=512M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/whyslow
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

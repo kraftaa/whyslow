@@ -1,0 +1,47 @@
+[Unit]
+Description=whyslow Puma collector (%i)
+Documentation=https://github.com/kraftaa/whyslow
+After=network-online.target
+Wants=network-online.target
+
+# Templated unit: enable one per web host, e.g.
+#   systemctl enable --now whyslow-collect-puma@web-3
+# %i becomes the host name recorded alongside the stats.
+
+[Service]
+Type=simple
+User=whyslow
+Group=whyslow
+
+EnvironmentFile=/etc/whyslow/puma.env
+ExecStart=/usr/local/bin/whyslow collect-puma \
+    --host-name %i \
+    --stats-url ${WHYSLOW_PUMA_STATS_URL} \
+    --token ${WHYSLOW_PUMA_TOKEN} \
+    --db /var/lib/whyslow/store.sqlite3 \
+    --interval 1.0
+
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+StateDirectory=whyslow
+StateDirectoryMode=0750
+
+# Hard memory ceiling. A wide `explain` window used to load every session
+# row into Python (733 MB for 48h); that is fixed by SQL-level
+# aggregation, but a ceiling means a future regression gets killed here
+# instead of taking the host down.
+MemoryMax=512M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/whyslow
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,354 @@
+import sqlite3
+import time
+from pathlib import Path
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS session_changes (
+    ts REAL NOT NULL,
+    pid INTEGER NOT NULL,
+    backend_type TEXT,
+    usename TEXT,
+    application_name TEXT,
+    state TEXT,
+    category TEXT,      -- lock / io / cpu / other
+    query TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_session_changes_ts ON session_changes(ts);
+
+CREATE TABLE IF NOT EXISTS blocking_edges (
+    ts REAL NOT NULL,
+    blocked_pid INTEGER NOT NULL,
+    blocked_app TEXT,
+    blocking_pid INTEGER NOT NULL,
+    blocking_app TEXT,
+    blocking_usename TEXT,
+    blocking_query TEXT,
+    -- When the edge stopped being observed. NULL means either still
+    -- active, or the collector stopped before it resolved. Without this,
+    -- duration is uncomputable -- and "has this been blocking for 4
+    -- seconds or 4 minutes?" is the whole kill-it-or-wait decision.
+    ended_ts REAL
+);
+CREATE INDEX IF NOT EXISTS idx_blocking_edges_ts ON blocking_edges(ts);
+
+CREATE TABLE IF NOT EXISTS puma_stats (
+    ts REAL NOT NULL,
+    host TEXT NOT NULL,
+    backlog INTEGER,
+    pool_capacity INTEGER,
+    max_threads INTEGER,
+    running INTEGER,
+    rss_mb REAL
+);
+CREATE INDEX IF NOT EXISTS idx_puma_stats_ts ON puma_stats(ts);
+
+CREATE TABLE IF NOT EXISTS cloudwatch_metrics (
+    ts REAL NOT NULL,
+    metric TEXT NOT NULL,
+    value REAL
+);
+CREATE INDEX IF NOT EXISTS idx_cloudwatch_metrics_ts ON cloudwatch_metrics(ts);
+
+CREATE TABLE IF NOT EXISTS events (
+    ts REAL NOT NULL,
+    source TEXT NOT NULL,
+    kind TEXT,
+    payload TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+
+-- Collectors write DIFFS: an idle period legitimately produces zero rows.
+-- That makes "healthy collector, quiet database" and "collector died three
+-- weeks ago" indistinguishable from the data alone -- a serious problem for
+-- a tool whose whole value depends on already running before an incident.
+-- Heartbeats disambiguate. Keyed by collector name, so this table never
+-- grows and never needs pruning.
+CREATE TABLE IF NOT EXISTS collector_heartbeats (
+    collector TEXT PRIMARY KEY,
+    ts REAL NOT NULL,
+    detail TEXT,
+    -- 'primary' | 'replica' | NULL. On Aurora, pointing the collector at
+    -- the cluster READER endpoint is the safer-looking choice (read-only,
+    -- no write risk) and is the wrong one: write-lock contention happens
+    -- on the writer and is invisible from a reader. Recorded per heartbeat
+    -- so `explain` can refuse to imply an all-clear from reader data,
+    -- rather than relying on someone having noticed a startup log line.
+    instance_role TEXT
+);
+
+-- Historical coverage, one row per collector per minute. The heartbeat
+-- table above is upsert-only, so it answers "is it alive NOW?" but makes
+-- past outages invisible -- and a window with no collector running looks
+-- exactly like a window where nothing happened. Reporting "nothing found"
+-- for an unwatched window is absence of evidence dressed up as evidence
+-- of absence, which is the most dangerous output this tool could produce.
+-- ~1440 rows/day/collector: negligible.
+CREATE TABLE IF NOT EXISTS collector_coverage (
+    collector TEXT NOT NULL,
+    minute_bucket INTEGER NOT NULL,
+    PRIMARY KEY (collector, minute_bucket)
+);
+"""
+
+
+RETENTION_SECONDS = {
+    "session_changes": 48 * 3600,
+    "puma_stats": 48 * 3600,
+    "blocking_edges": 30 * 86400,
+    "cloudwatch_metrics": 30 * 86400,
+    # events: no automatic pruning -- volume is tiny, retained indefinitely
+}
+
+
+class Store:
+    def __init__(self, path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(str(self.path))
+        # WAL mode: readers and writers never block each other, unlike the
+        # default rollback-journal mode. Not fixing an observed bug --
+        # concurrent multi-process writes and realistic read-while-write
+        # both tested clean under the default settings (Python's sqlite3
+        # module already retries for 5s by default). This is preventive,
+        # for the one untested worst case: a severe incident producing a
+        # large burst of writes in a single poll, with `whyslow`
+        # run concurrently by someone investigating in real time.
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.executescript(SCHEMA)
+        self._migrate()
+        self.conn.commit()
+
+    def _migrate(self):
+        """Add columns introduced after a database was first created.
+        `CREATE TABLE IF NOT EXISTS` silently does nothing on an existing
+        table, so without this an upgraded install would break on the
+        first query referencing a new column."""
+        expected = {
+            "blocking_edges": {"ended_ts": "REAL"},
+            "collector_heartbeats": {"instance_role": "TEXT"},
+        }
+        for table, columns in expected.items():
+            existing = {
+                row[1] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            for column, coltype in columns.items():
+                if column not in existing:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        self.conn.commit()
+
+    # ---- writes (collectors call these) ----
+
+    def write_sessions(self, rows, ts=None):
+        ts = ts or time.time()
+        self.conn.executemany(
+            "INSERT INTO session_changes "
+            "(ts, pid, backend_type, usename, application_name, state, category, query) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            [(ts, *r) for r in rows],
+        )
+        self.conn.commit()
+
+    def write_blocking_edges(self, rows, ts=None):
+        ts = ts or time.time()
+        self.conn.executemany(
+            "INSERT INTO blocking_edges "
+            "(ts, blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_usename, blocking_query) "
+            "VALUES (?,?,?,?,?,?,?)",
+            [(ts, *r) for r in rows],
+        )
+        self.conn.commit()
+
+    def write_puma_stat(self, host, backlog, pool_capacity, max_threads, running, rss_mb, ts=None):
+        ts = ts or time.time()
+        self.conn.execute(
+            "INSERT INTO puma_stats (ts, host, backlog, pool_capacity, max_threads, running, rss_mb) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (ts, host, backlog, pool_capacity, max_threads, running, rss_mb),
+        )
+        self.conn.commit()
+
+    def write_cloudwatch_metric(self, metric, value, ts=None):
+        ts = ts or time.time()
+        self.conn.execute(
+            "INSERT INTO cloudwatch_metrics (ts, metric, value) VALUES (?,?,?)",
+            (ts, metric, value),
+        )
+        self.conn.commit()
+
+    def write_event(self, source, kind, payload, ts=None):
+        ts = ts or time.time()
+        self.conn.execute(
+            "INSERT INTO events (ts, source, kind, payload) VALUES (?,?,?,?)",
+            (ts, source, kind, payload),
+        )
+        self.conn.commit()
+
+    # ---- windowed reads (explain engine calls these) ----
+
+    def sessions_in(self, start_ts, end_ts):
+        return self.conn.execute(
+            "SELECT ts, pid, backend_type, usename, application_name, state, category, query "
+            "FROM session_changes WHERE ts BETWEEN ? AND ? ORDER BY ts",
+            (start_ts, end_ts),
+        ).fetchall()
+
+    def mark_blocking_edges_ended(self, edge_keys, ts=None):
+        """Mark (blocked_pid, blocking_pid) pairs as no longer observed.
+        Updates the most recent unresolved row for each pair."""
+        ts = ts or time.time()
+        for blocked_pid, blocking_pid in edge_keys:
+            self.conn.execute(
+                "UPDATE blocking_edges SET ended_ts = ? "
+                "WHERE rowid = ("
+                "  SELECT rowid FROM blocking_edges "
+                "  WHERE blocked_pid = ? AND blocking_pid = ? AND ended_ts IS NULL "
+                "  ORDER BY ts DESC LIMIT 1"
+                ")",
+                (ts, blocked_pid, blocking_pid),
+            )
+        self.conn.commit()
+
+    def sessions_aggregated_in(self, start_ts, end_ts):
+        """Per-minute, per-category session counts.
+
+        Sessions are the only high-volume table: on a busy database the diff
+        key churns several times a second, so 48h can hold ~900k rows.
+        Loading those into Python cost 733 MB of RAM for a single explain --
+        a real OOM risk on a small collector host. Aggregating in SQL bounds
+        this to (minutes x categories) rows regardless of window size, and
+        nothing is lost, because individual session rows were never displayed
+        or used individually anyway -- only counted and checked for temporal
+        proximity.
+        """
+        return self.conn.execute(
+            "SELECT CAST(ts/60 AS INTEGER) AS minute_bucket, category, "
+            "count(*) AS n, min(ts) AS first_ts, max(ts) AS last_ts "
+            "FROM session_changes WHERE ts BETWEEN ? AND ? "
+            "GROUP BY minute_bucket, category ORDER BY minute_bucket",
+            (start_ts, end_ts),
+        ).fetchall()
+
+    def top_session_queries_in(self, start_ts, end_ts, limit=5):
+        """Most frequent queries in the window, for context. Bounded by
+        `limit`, so it stays cheap on a wide window."""
+        return self.conn.execute(
+            "SELECT query, usename, category, count(*) AS n "
+            "FROM session_changes WHERE ts BETWEEN ? AND ? AND query IS NOT NULL "
+            "GROUP BY query, usename, category ORDER BY n DESC LIMIT ?",
+            (start_ts, end_ts, limit),
+        ).fetchall()
+
+    def blocking_edges_in(self, start_ts, end_ts):
+        return self.conn.execute(
+            "SELECT ts, blocked_pid, blocked_app, blocking_pid, blocking_app, "
+            "blocking_usename, blocking_query, ended_ts "
+            "FROM blocking_edges WHERE ts BETWEEN ? AND ? ORDER BY ts",
+            (start_ts, end_ts),
+        ).fetchall()
+
+    def puma_stats_in(self, start_ts, end_ts):
+        return self.conn.execute(
+            "SELECT ts, host, backlog, pool_capacity, max_threads, running, rss_mb "
+            "FROM puma_stats WHERE ts BETWEEN ? AND ? ORDER BY ts",
+            (start_ts, end_ts),
+        ).fetchall()
+
+    def cloudwatch_metrics_in(self, start_ts, end_ts):
+        return self.conn.execute(
+            "SELECT ts, metric, value FROM cloudwatch_metrics WHERE ts BETWEEN ? AND ? ORDER BY ts",
+            (start_ts, end_ts),
+        ).fetchall()
+
+    def events_in(self, start_ts, end_ts):
+        return self.conn.execute(
+            "SELECT ts, source, kind, payload FROM events WHERE ts BETWEEN ? AND ? ORDER BY ts",
+            (start_ts, end_ts),
+        ).fetchall()
+
+    def write_heartbeat(self, collector, detail=None, ts=None, instance_role=None):
+        ts = ts or time.time()
+        self.conn.execute(
+            "INSERT INTO collector_heartbeats (collector, ts, detail, instance_role) "
+            "VALUES (?,?,?,?) "
+            "ON CONFLICT(collector) DO UPDATE SET ts=excluded.ts, detail=excluded.detail, "
+            "instance_role=excluded.instance_role",
+            (collector, ts, detail, instance_role),
+        )
+        # Also record historical coverage so past gaps stay visible.
+        self.conn.execute(
+            "INSERT OR IGNORE INTO collector_coverage (collector, minute_bucket) VALUES (?,?)",
+            (collector, int(ts // 60)),
+        )
+        self.conn.commit()
+
+    def coverage_in(self, start_ts, end_ts):
+        """Per-collector coverage across a window.
+
+        Deliberately NOT a single aggregate number. Each collector answers a
+        different question -- Postgres gives blocking chains and session
+        categories, Puma gives app saturation, CloudWatch gives instance
+        metrics -- so "some collector was running" cannot validate a specific
+        conclusion. Counting any-collector coverage as full coverage was a
+        real bug: a live Puma collector made a dead Postgres collector look
+        like full coverage, which let "no blocking found" print confidently
+        when nothing had ever been watching for blocking.
+        """
+        start_bucket = int(start_ts // 60)
+        end_bucket = int(end_ts // 60)
+        total = max(end_bucket - start_bucket + 1, 1)
+
+        per_collector = dict(self.conn.execute(
+            "SELECT collector, count(*) FROM collector_coverage "
+            "WHERE minute_bucket BETWEEN ? AND ? GROUP BY collector",
+            (start_bucket, end_bucket),
+        ).fetchall())
+
+        return {
+            "total_minutes": total,
+            "per_collector": {
+                name: {"minutes": count, "fraction": count / total}
+                for name, count in per_collector.items()
+            },
+        }
+
+    def get_heartbeats(self):
+        return self.conn.execute(
+            "SELECT collector, ts, detail, instance_role FROM collector_heartbeats "
+            "ORDER BY collector"
+        ).fetchall()
+
+    def data_coverage(self):
+        """Earliest/latest timestamp and row count per data table -- used by
+        `whyslow status` to show what windows are actually explainable."""
+        coverage = {}
+        for table in ("session_changes", "blocking_edges", "puma_stats",
+                       "cloudwatch_metrics", "events"):
+            row = self.conn.execute(
+                f"SELECT min(ts), max(ts), count(*) FROM {table}"
+            ).fetchone()
+            coverage[table] = {"min_ts": row[0], "max_ts": row[1], "count": row[2]}
+        return coverage
+
+    def prune(self, now=None):
+        """Delete rows older than each table's retention window. Cheap and
+        safe to call frequently -- collectors call this periodically, not
+        on every poll."""
+        now = now or time.time()
+        deleted = {}
+        for table, retention in RETENTION_SECONDS.items():
+            cutoff = now - retention
+            cur = self.conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+            deleted[table] = cur.rowcount
+        # collector_coverage is bucketed by minute, not by a ts column, so
+        # it needs its own prune. Kept as long as blocking_edges, since
+        # coverage is what makes an old explain result trustworthy.
+        coverage_cutoff = int((now - RETENTION_SECONDS["blocking_edges"]) // 60)
+        cur = self.conn.execute(
+            "DELETE FROM collector_coverage WHERE minute_bucket < ?", (coverage_cutoff,)
+        )
+        deleted["collector_coverage"] = cur.rowcount
+        self.conn.commit()
+        return deleted
+
+    def close(self):
+        self.conn.close()
