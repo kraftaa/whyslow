@@ -349,6 +349,10 @@ class Store:
             "WHERE minute_bucket BETWEEN ? AND ? GROUP BY collector",
             (start_bucket, end_bucket),
         ).fetchall())
+        known_collectors = self.conn.execute(
+            "SELECT collector, min(minute_bucket) FROM collector_coverage "
+            "GROUP BY collector"
+        ).fetchall()
 
         return {
             "total_minutes": total,
@@ -356,6 +360,13 @@ class Store:
                 name: {"minutes": count, "fraction": count / total}
                 for name, count in per_collector.items()
             },
+            # The first observed minute lets historical reports ignore a
+            # target that had not joined the fleet yet.
+            "known_collectors": {
+                name: {"first_minute": first_minute}
+                for name, first_minute in known_collectors
+            },
+            "end_bucket": end_bucket,
         }
 
     def get_heartbeats(self):

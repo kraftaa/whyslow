@@ -342,7 +342,7 @@ COLLECTOR_ROLES = [
     ("postgres", lambda n: n == "postgres",
      "blocking chains and database session pressure"),
     ("puma", lambda n: n.startswith("puma:"),
-     "web app saturation (thread pool, memory)"),
+     "web app saturation (thread pool and backlog)"),
     ("cloudwatch", lambda n: n == "cloudwatch",
      "instance CPU and connection counts"),
 ]
@@ -353,13 +353,35 @@ COVERAGE_OK_THRESHOLD = 0.9
 def _assess_coverage(raw, db_instance_role=None):
     """Turn raw per-collector minute counts into per-role verdicts."""
     per_collector = raw["per_collector"]
+    known_collectors = raw.get("known_collectors", {})
+    end_bucket = raw.get("end_bucket")
     roles = {}
     for role, matcher, describes in COLLECTOR_ROLES:
-        matching = {n: d for n, d in per_collector.items() if matcher(n)}
-        # Best coverage among collectors filling this role (e.g. several
-        # Puma hosts): if any one covered the window, that role is covered.
-        best = max((d["fraction"] for d in matching.values()), default=0.0)
-        ok = best >= COVERAGE_OK_THRESHOLD
+        matching_names = {name for name in per_collector if matcher(name)}
+        matching_names.update(
+            name
+            for name, detail in known_collectors.items()
+            if matcher(name)
+            and (end_bucket is None or detail["first_minute"] <= end_bucket)
+        )
+        matching = {
+            name: per_collector.get(name, {"minutes": 0, "fraction": 0.0})
+            for name in matching_names
+        }
+        fractions = [detail["fraction"] for detail in matching.values()]
+        # Puma represents a fleet: one healthy target must not hide a peer
+        # that was absent for part or all of the requested window.
+        fraction = (
+            min(fractions, default=0.0)
+            if role == "puma"
+            else max(fractions, default=0.0)
+        )
+        missing_collectors = sorted(
+            name
+            for name, detail in matching.items()
+            if detail["fraction"] < COVERAGE_OK_THRESHOLD
+        )
+        ok = bool(matching) and fraction >= COVERAGE_OK_THRESHOLD
         note = None
         # Time-based coverage is necessary but not sufficient: a replica
         # collector can cover 100% of the window and still be structurally
@@ -369,9 +391,10 @@ def _assess_coverage(raw, db_instance_role=None):
             ok = False
             note = "collector is on a replica -- cannot see write-lock contention"
         roles[role] = {
-            "fraction": best,
+            "fraction": fraction,
             "describes": describes,
             "collectors": sorted(matching),
+            "missing_collectors": missing_collectors,
             "ok": ok,
             "note": note,
         }
@@ -489,6 +512,11 @@ def render(result, start_ts, end_ts):
                 missing_pct = (1 - info["fraction"]) * 100
                 lines.append(f"  {role:<11} missing {missing_pct:.0f}% of window "
                               f"-> cannot rule out: {info['describes']}")
+                if info.get("missing_collectors"):
+                    lines.append(
+                        f"  {'':<11} missing collectors: "
+                        f"{', '.join(info['missing_collectors'])}"
+                    )
         for role, info in roles.items():
             if info["ok"]:
                 lines.append(f"  {role:<11} covered ({', '.join(info['collectors'])})")

@@ -119,5 +119,46 @@ assert "cannot rule out" in out and "blocking chains" in out, (
 assert "puma" in out and "covered" in out, "should credit the collector that WAS running"
 store.close()
 
-print("\nPASS: per-collector coverage -- a live collector for one role never "
-      "validates conclusions that depend on a different, dead collector")
+# ---------------------------------------------------------------
+# Case 6: one healthy Puma host must not hide a missing fleet peer.
+# ---------------------------------------------------------------
+shutil.rmtree("/tmp/cov6", ignore_errors=True)
+store = Store("/tmp/cov6/store.sqlite3")
+for minute in range(61):
+    store.write_heartbeat("puma:web-3", detail="ok", ts=now - 3600 + minute * 60)
+for minute in range(10):
+    store.write_heartbeat("puma:web-4", detail="ok", ts=now - 3600 + minute * 60)
+result = explain_mod.explain(store, now - 3600, now)
+out = explain_mod.render(result, now - 3600, now)
+print("\n=== Case 6: one complete Puma host, one partial host ===")
+print(out.split("Incident Summary")[0])
+
+puma = result["coverage"]["roles"]["puma"]
+assert not puma["ok"], "partial coverage from one Puma host must fail the fleet role"
+assert puma["collectors"] == ["puma:web-3", "puma:web-4"]
+assert puma["missing_collectors"] == ["puma:web-4"]
+assert "missing collectors: puma:web-4" in out
+store.close()
+
+# ---------------------------------------------------------------
+# Case 7: a host first observed later was not expected in an older
+# historical window.
+# ---------------------------------------------------------------
+shutil.rmtree("/tmp/cov7", ignore_errors=True)
+store = Store("/tmp/cov7/store.sqlite3")
+historical_now = now - 7200
+for minute in range(61):
+    store.write_heartbeat(
+        "puma:web-3",
+        detail="ok",
+        ts=historical_now - 3600 + minute * 60,
+    )
+store.write_heartbeat("puma:web-4", detail="ok", ts=now)
+result = explain_mod.explain(store, historical_now - 3600, historical_now)
+puma = result["coverage"]["roles"]["puma"]
+assert puma["ok"], "a future fleet member must not invalidate an older window"
+assert puma["collectors"] == ["puma:web-3"]
+store.close()
+
+print("\nPASS: role and fleet coverage cannot be validated by an unrelated "
+      "or incomplete collector")

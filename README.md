@@ -234,6 +234,11 @@ from it exclusively. Worth stating plainly: this was a regression in a
 fix shipped one round earlier, caught only by testing the fix rather
 than trusting it.
 
+Puma coverage is also evaluated across the full known fleet. Every
+target that existed during the requested window must meet the coverage
+threshold; one healthy web host cannot hide a missing peer. Historical
+reports ignore targets that had not joined the fleet yet.
+
 ### Round: an unwatched window read as an all-clear
 
 - **The worst bug found in this project, because it produced a confident
