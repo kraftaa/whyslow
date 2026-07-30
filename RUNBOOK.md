@@ -13,15 +13,23 @@ reader. `whyslow status` will flag this and exit non-zero if you get it
 wrong.
 
 ```bash
-# on the host with DB credentials -- WRITER endpoint
+# Run all of these on ONE collector host against ONE SQLite file.
+# Postgres must use the WRITER endpoint.
 export WHYSLOW_PG_DSN="postgresql://user:pass@writer-endpoint/db"
 whyslow collect-pg --db /var/lib/whyslow/store.sqlite3
 
-# on each web host
-whyslow collect-puma --host-name $(hostname) --stats-url http://127.0.0.1:9293/stats
+# Repeat for each private Puma control endpoint reachable from this host.
+whyslow collect-puma --host-name web-3 \
+  --stats-url https://web-3.internal:9293/stats \
+  --db /var/lib/whyslow/store.sqlite3
+
+whyslow collect-cw --db-instance-id my-aurora-cluster \
+  --db /var/lib/whyslow/store.sqlite3
 ```
 
-Use the systemd units in `deploy/` so they survive reboots. Then verify
+Do not run these against separate local stores on each web server: the
+tool cannot correlate timelines split across files. Use the systemd units
+in `deploy/` on the collector host so they survive reboots. Then verify
 it's actually working, and check again occasionally:
 
 ```bash

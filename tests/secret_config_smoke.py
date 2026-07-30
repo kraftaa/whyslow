@@ -71,8 +71,14 @@ with mock.patch.dict(os.environ, {}, clear=True):
 root = Path(__file__).resolve().parents[1]
 pg_unit = (root / "deploy" / "whyslow-collect-pg.service").read_text()
 puma_unit = (root / "deploy" / "whyslow-collect-puma@.service").read_text()
+cw_unit = (root / "deploy" / "whyslow-collect-cw.service").read_text()
 
 assert "--dsn" not in pg_unit, "systemd must not expose the DSN in process arguments"
 assert "--token" not in puma_unit, "systemd must not expose the Puma token in process arguments"
+assert "puma/%i.env" in puma_unit, "each Puma target needs its own central-host configuration"
+for unit in (pg_unit, puma_unit, cw_unit):
+    assert "--db /var/lib/whyslow/store.sqlite3" in unit, (
+        "all collectors must write to the same central SQLite store"
+    )
 
 print("PASS: collector secrets come from the environment and stay out of systemd process arguments")

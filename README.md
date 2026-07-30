@@ -24,16 +24,17 @@ at 2am. This does it from data already being collected.
 
 ## How it works, in six steps (no model, no statistics)
 
-1. Fetch every row from the three collector tables inside the
-   requested window. No logic yet — a plain read.
+1. Fetch blocking edges, Puma stats, metrics, and events inside the
+   requested window; aggregate high-volume session changes by minute
+   and wait category in SQLite so wide windows stay bounded.
 2. Merge everything by timestamp into one plain-English timeline.
 3. Find candidates: any pid that appears as a *blocker*, or any
    sustained cluster of CPU/IO-bound sessions.
 4. For each candidate, check a **fixed, readable list** of named
    signals — each one a lookup: does a row exist, is a timestamp
    within `COOCCURRENCE_WINDOW_SECONDS` of another.
-5. Count how many signals fired, look up a confidence label
-   (`3/3 High, 2/3 Medium, 1/3 Low`) from a plain dict.
+5. Count how many named signals fired and apply fixed thresholds:
+   at least 75% High, at least 50% Medium, anything above zero Low.
 6. Render the timeline, contributors, and the exact evidence lines
    that caused each confidence label.
 
@@ -66,18 +67,26 @@ production:
 
 ```bash
 pip install -e .
+# Include this extra on the collector host when CloudWatch is enabled:
+pip install -e ".[cloudwatch]"
 ```
 
-Run collectors as long-lived processes (systemd unit, supervisor,
-whatever you already use):
+Run every collector on one collector host and point every process at the
+same SQLite file. The Puma control endpoints must be reachable from that
+host over a private TLS connection or tunnel; running collectors
+independently on each web server creates isolated stores that cannot be
+correlated.
+
+Use long-lived processes (systemd unit, supervisor, whatever you already
+use):
 
 ```bash
 export WHYSLOW_PG_DSN="postgresql://user:pass@host/db"
 export WHYSLOW_PUMA_TOKEN="replace-me"
 
-whyslow collect-pg
-whyslow collect-puma  --host-name web-3 --stats-url http://127.0.0.1:9293/stats
-whyslow collect-cw    --db-instance-id my-aurora-cluster   # requires: pip install -e ".[cloudwatch]"
+whyslow collect-pg    --db /var/lib/whyslow/store.sqlite3
+whyslow collect-puma  --host-name web-3 --stats-url https://web-3.internal:9293/stats --db /var/lib/whyslow/store.sqlite3
+whyslow collect-cw    --db-instance-id my-aurora-cluster --db /var/lib/whyslow/store.sqlite3
 ```
 
 `--dsn` and `--token` remain available for local testing, but environment
@@ -449,8 +458,10 @@ whyslow diff --last 15m --baseline-last 15m   # baseline = the 15m just before
 
 ## Deployment
 
-`deploy/` contains systemd units for the Postgres collector and a
-templated one for Puma (`whyslow-collect-puma@web-3`). Both use
+`deploy/` contains systemd units for Postgres and CloudWatch plus a
+templated Puma unit (`whyslow-collect-puma@web-3`). Run all of them on
+the same collector host. Each Puma instance reads its target URL and
+token from `/etc/whyslow/puma/<host>.env`. The units use
 `Restart=always` with `StartLimitIntervalSec=0` — a collector that gives
 up retrying is a collector that silently isn't there when it matters —
 and read credentials from an `EnvironmentFile` rather than command-line
@@ -467,7 +478,7 @@ output from that run:
 
 ```
 Observed contributors
-- postgres [blocking] -- Low confidence (1/3 signals)
+- postgres [blocking] -- Low confidence (1/4 signals)
 
 Evidence
   postgres:
@@ -480,10 +491,10 @@ also captured `autovacuum launcher`, `checkpointer`, and `walwriter`
 automatically via `backend_type`, with no code written for any of
 them.
 
-`tests/synthetic_reindex_smoke.py` confirms the full 3-signal path —
+`tests/synthetic_reindex_smoke.py` confirms the 75% threshold path —
 a REINDEX blocking a tagged host with a corroborating Puma backlog
-spike — correctly yields **High** confidence with all three evidence
-lines present.
+spike — correctly yields **High** confidence with three of four named
+signals and all three evidence lines present.
 
 `tests/load_bench.py` and `tests/blocking_load_bench.py` measure
 actual per-poll cost under load rather than assuming it: ~3-5ms
@@ -511,11 +522,9 @@ run manually against a local Postgres to reproduce.
   AWS credentials this environment doesn't have). Everything else in
   this README is demonstrated against a real running Postgres
   instance, not simulated.
-- **Puma collector expects `activate_control_app` enabled**; cross-host
-  RSS collection isn't wired yet — only local RSS is read in this MVP.
-- **No retention/pruning implemented yet.** The spec calls for ~48h
-  on session/puma tables and ~30 days on blocking edges and CloudWatch
-  metrics; this MVP does not yet enforce it.
+- **Puma collector expects `activate_control_app` enabled and reachable
+  from the collector host.** Puma worker RSS is not collected because
+  the control-app stats do not expose it.
 
 ## `whyslow diff` — a healthy baseline vs the incident window
 

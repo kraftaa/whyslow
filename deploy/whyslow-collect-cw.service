@@ -1,0 +1,38 @@
+[Unit]
+Description=whyslow CloudWatch collector
+Documentation=https://github.com/kraftaa/whyslow
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=whyslow
+Group=whyslow
+
+# Define WHYSLOW_DB_INSTANCE_ID and the standard AWS region/credential
+# environment variables in a root-owned 0600 file.
+EnvironmentFile=/etc/whyslow/cloudwatch.env
+ExecStart=/usr/local/bin/whyslow collect-cw \
+    --db-instance-id ${WHYSLOW_DB_INSTANCE_ID} \
+    --db /var/lib/whyslow/store.sqlite3 \
+    --interval 60.0
+
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+StateDirectory=whyslow
+StateDirectoryMode=0750
+MemoryMax=512M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/whyslow
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

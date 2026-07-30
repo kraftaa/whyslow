@@ -7,9 +7,8 @@ from .storage import Store
 
 class PumaCollector:
     """Polls Puma's control-app /stats endpoint (activate_control_app in
-    config/puma.rb) for thread-pool saturation, and /proc for RSS. Requires
-    no Ruby-side code beyond enabling the control app -- this is a plain
-    HTTP client."""
+    config/puma.rb) for thread-pool saturation. Requires no Ruby-side code
+    beyond enabling the control app -- this is a plain HTTP client."""
 
     def __init__(self, host_name, stats_url, store: Store, interval=1.0, auth_token=None):
         self.host_name = host_name
@@ -52,30 +51,18 @@ class PumaCollector:
             max_threads = data.get("max_threads", 0)
             backlog = data.get("backlog", 0)
 
-        rss_mb = self._rss_mb()
         self.store.write_puma_stat(
             host=self.host_name,
             backlog=backlog,
             pool_capacity=pool_capacity,
             max_threads=max_threads,
             running=running,
-            rss_mb=rss_mb,
+            # Puma's control-app stats do not expose worker RSS. Reading
+            # /proc/self/status here used to report the Python collector's
+            # RSS as if it belonged to Puma, which was actively misleading.
+            rss_mb=None,
         )
         return backlog, pool_capacity
-
-    def _rss_mb(self):
-        # Best-effort local RSS; on a remote host this would read the
-        # remote worker's /proc via an agent instead. Not wired for
-        # cross-host RSS in this MVP -- documented limitation.
-        try:
-            with open("/proc/self/status") as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        kb = int(line.split()[1])
-                        return round(kb / 1024, 1)
-        except Exception:
-            pass
-        return None
 
     def run_forever(self):
         print(f"[whyslow] puma collector polling {self.stats_url} every {self.interval}s")

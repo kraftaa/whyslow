@@ -84,9 +84,10 @@ def build_timeline(store, start_ts, end_ts):
         ))
 
     for ts, host, backlog, pool_capacity, max_threads, running, rss_mb in store.puma_stats_in(start_ts, end_ts):
+        rss = f" rss={rss_mb}MB" if rss_mb is not None else ""
         timeline.append((
             ts,
-            f"Puma {host}: backlog={backlog} pool_capacity={pool_capacity}/{max_threads} rss={rss_mb}MB",
+            f"Puma {host}: backlog={backlog} pool_capacity={pool_capacity}/{max_threads}{rss}",
             {"kind": "puma", "host": host, "backlog": backlog},
         ))
 

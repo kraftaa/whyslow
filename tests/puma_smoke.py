@@ -4,6 +4,7 @@ import time
 from fake_puma import start as start_fake_puma
 from whyslow.storage import Store
 from whyslow.collector_puma import PumaCollector
+from whyslow import explain as explain_mod
 
 DB_PATH = "/tmp/puma_smoke/store.sqlite3"
 shutil.rmtree("/tmp/puma_smoke", ignore_errors=True)
@@ -17,6 +18,9 @@ backlog, pool_capacity = collector.poll_once()
 print(f"single-mode: backlog={backlog} pool_capacity={pool_capacity}")
 assert backlog == 5, f"expected backlog=5, got {backlog}"
 assert pool_capacity == 6, f"expected pool_capacity=6, got {pool_capacity}"
+assert store.puma_stats_in(0, time.time())[-1][6] is None, (
+    "collector must not report its own process RSS as Puma RSS"
+)
 srv1.shutdown()
 
 # --- clustered-mode: one worker saturated, three idle ---
@@ -31,6 +35,9 @@ print(f"clustered-mode: backlog={backlog2} pool_capacity={pool_capacity2}")
 # (0+12+15+15) -- both wrong. Worst-worker gives the real signal: 20 and 0.
 assert backlog2 == 20, f"expected worst-worker backlog=20, got {backlog2}"
 assert pool_capacity2 == 0, f"expected worst-worker pool_capacity=0, got {pool_capacity2}"
+assert store.puma_stats_in(0, time.time())[-1][6] is None
+timeline = explain_mod.build_timeline(store, 0, time.time())
+assert all("NoneMB" not in line for _, line, _ in timeline)
 
 store.close()
 print("\nPASS: single-mode and clustered-mode (worst-worker) Puma parsing both correct")

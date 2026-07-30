@@ -4,7 +4,13 @@ Documentation=https://github.com/kraftaa/whyslow
 After=network-online.target
 Wants=network-online.target
 
-# Templated unit: enable one per web host, e.g.
+# Run every instance on the central collector host so all sources write to
+# the same SQLite store. Give each Puma target its own environment file:
+#   /etc/whyslow/puma/web-3.env
+# containing WHYSLOW_PUMA_STATS_URL and, if required, WHYSLOW_PUMA_TOKEN.
+# Reach the target over TLS or a private tunnel so the bearer token and
+# operational data are not sent in cleartext.
+# Enable one instance per web host, e.g.
 #   systemctl enable --now whyslow-collect-puma@web-3
 # %i becomes the host name recorded alongside the stats.
 
@@ -13,7 +19,7 @@ Type=simple
 User=whyslow
 Group=whyslow
 
-EnvironmentFile=/etc/whyslow/puma.env
+EnvironmentFile=/etc/whyslow/puma/%i.env
 ExecStart=/usr/local/bin/whyslow collect-puma \
     --host-name %i \
     --stats-url ${WHYSLOW_PUMA_STATS_URL} \

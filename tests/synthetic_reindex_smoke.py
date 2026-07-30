@@ -35,4 +35,4 @@ print(explain_mod.render(result, t0 - 5, t0 + 10))
 assert result["contributors"], "expected at least one contributor"
 c = result["contributors"][0]
 assert c["confidence"] == "High", f"expected High confidence, got {c['confidence']} (signals={c['signals']})"
-print("\nPASS: 3/3 signals correctly yield High confidence")
+print("\nPASS: 3/4 signals correctly meet the 75% High-confidence threshold")
