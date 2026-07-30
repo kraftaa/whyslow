@@ -31,7 +31,8 @@ RestartSec=5
 StartLimitIntervalSec=0
 
 StateDirectory=whyslow
-StateDirectoryMode=0750
+StateDirectoryMode=0700
+UMask=0077
 
 # Hard memory ceiling. A wide `explain` window used to load every session
 # row into Python (733 MB for 48h); that is fixed by SQL-level

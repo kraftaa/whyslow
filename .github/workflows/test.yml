@@ -69,6 +69,9 @@ jobs:
       - name: Query-label (Rails/ActiveRecord comment) regression test
         run: python3 tests/query_label_smoke.py
 
+      - name: Stored-query privacy regression test
+        run: python3 tests/query_privacy_smoke.py
+
       - name: IO-bound resource-contention regression test
         run: python3 tests/io_contention_smoke.py
 

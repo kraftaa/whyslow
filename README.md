@@ -503,7 +503,9 @@ Postgres collector is unavailable. The collector units use
 up retrying is a collector that silently isn't there when it matters —
 and read credentials from an `EnvironmentFile` rather than command-line
 arguments, since a DSN passed as an argument is visible in `ps` output
-to every user on the box.
+to every user on the box. SQL string/numeric literals and comments are
+removed before query evidence is stored, query text is capped at 2 KiB,
+and the SQLite file is created with mode `0600`.
 
 ## Verified with a real Postgres instance
 
@@ -523,7 +525,7 @@ Evidence
 ```
 
 Correctly Low, not High — because that run had no Puma data and the
-query wasn't a maintenance pattern, so only 1 of 3 signals fired. It
+query wasn't a maintenance pattern, so only 1 of 4 signals fired. It
 also captured `autovacuum launcher`, `checkpointer`, and `walwriter`
 automatically via `backend_type`, with no code written for any of
 them.
@@ -555,6 +557,9 @@ run manually against a local Postgres to reproduce.
 - **Query-text pattern matching for maintenance labels
   (`REINDEX`/`VACUUM FULL`/`COPY`/`CREATE INDEX`) is best-effort
   and cosmetic only** — it never gates detection, only readability.
+- **Sanitized query structure is still operational data.** Literal values
+  and comments are removed, but statement types and relation names remain
+  visible by design. Treat the mode-`0600` SQLite store as sensitive.
 - **CloudWatch collector is real code, not live-tested** (requires
   AWS credentials this environment doesn't have). Everything else in
   this README is demonstrated against a real running Postgres

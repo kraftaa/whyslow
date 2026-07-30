@@ -25,7 +25,8 @@ RestartSec=5
 StartLimitIntervalSec=0
 
 StateDirectory=whyslow
-StateDirectoryMode=0750
+StateDirectoryMode=0700
+UMask=0077
 
 # Least privilege: this only needs to read a database over the network
 # and write one SQLite file.

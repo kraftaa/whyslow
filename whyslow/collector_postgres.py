@@ -23,6 +23,17 @@ MAINTENANCE_PATTERNS = [
 # Matching from literal string-start would silently miss these, which
 # matters a lot here: this stack is Puma, i.e. very likely Rails.
 _LEADING_COMMENT = re.compile(r"^\s*(/\*.*?\*/\s*|--[^\n]*\n?\s*)")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_LINE_COMMENT = re.compile(r"--[^\n]*")
+_SIMPLE_DOLLAR_QUOTE = re.compile(r"\$\$.*?\$\$", re.S)
+_TAGGED_DOLLAR_QUOTE = re.compile(
+    r"\$([A-Za-z_][A-Za-z0-9_]*)\$.*?\$\1\$",
+    re.S,
+)
+_SINGLE_QUOTED_LITERAL = re.compile(r"'(?:''|[^'])*'", re.S)
+_NUMERIC_LITERAL = re.compile(r"(?<![\w.])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?![\w.])")
+_WHITESPACE = re.compile(r"\s+")
+MAX_STORED_QUERY_CHARS = 2048
 
 
 def _strip_leading_comments(s):
@@ -41,6 +52,26 @@ def label_query(query):
         if pattern.match(query):
             return label
     return None
+
+
+def sanitize_query(query):
+    """Keep diagnostic SQL structure while removing likely sensitive data.
+
+    Query text can contain emails, tokens, payloads, request-tag comments,
+    and numeric identifiers. The incident engine only needs statement shape,
+    relation names, and maintenance keywords, so literals and comments are
+    replaced before anything reaches SQLite.
+    """
+    if query is None:
+        return None
+    sanitized = _TAGGED_DOLLAR_QUOTE.sub("'?'", query)
+    sanitized = _SIMPLE_DOLLAR_QUOTE.sub("'?'", sanitized)
+    sanitized = _SINGLE_QUOTED_LITERAL.sub("'?'", sanitized)
+    sanitized = _BLOCK_COMMENT.sub(" ", sanitized)
+    sanitized = _LINE_COMMENT.sub(" ", sanitized)
+    sanitized = _NUMERIC_LITERAL.sub("?", sanitized)
+    sanitized = _WHITESPACE.sub(" ", sanitized).strip()
+    return sanitized[:MAX_STORED_QUERY_CHARS]
 
 
 SESSIONS_SQL = """
@@ -127,21 +158,32 @@ class PostgresCollector:
         session_rows = []
         current_session_keys = set()
         for pid, backend_type, usename, app, state, category, query in sessions:
-            key = (pid, state, category, query)
+            safe_query = sanitize_query(query)
+            key = (pid, state, category, safe_query)
             current_session_keys.add(key)
             if key not in self._last_session_keys:
-                session_rows.append((pid, backend_type, usename, app, state, category, query))
+                session_rows.append(
+                    (pid, backend_type, usename, app, state, category, safe_query)
+                )
         self._last_session_keys = current_session_keys
 
         edge_rows = []
         current_edge_keys = set()
         last_blocking_keys_snapshot = self._last_blocking_keys
         for blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_user, blocking_query in edges:
+            safe_blocking_query = sanitize_query(blocking_query)
             key = (blocked_pid, blocking_pid)
             current_edge_keys.add(key)
             if key not in self._last_blocking_keys:
                 edge_rows.append(
-                    (blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_user, blocking_query)
+                    (
+                        blocked_pid,
+                        blocked_app,
+                        blocking_pid,
+                        blocking_app,
+                        blocking_user,
+                        safe_blocking_query,
+                    )
                 )
         self._last_blocking_keys = current_edge_keys
 

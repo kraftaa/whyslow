@@ -9,7 +9,8 @@ Group=whyslow
 ExecStart=/usr/local/bin/whyslow prune --db /var/lib/whyslow/store.sqlite3
 
 StateDirectory=whyslow
-StateDirectoryMode=0750
+StateDirectoryMode=0700
+UMask=0077
 MemoryMax=512M
 
 NoNewPrivileges=true

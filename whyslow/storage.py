@@ -110,6 +110,8 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), timeout=30)
+        if str(self.path) != ":memory:":
+            self.path.chmod(0o600)
         self.conn.execute("PRAGMA busy_timeout=30000;")
         # WAL mode: readers and writers never block each other, unlike the
         # default rollback-journal mode. Enabling WAL itself needs a write
