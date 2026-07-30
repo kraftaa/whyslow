@@ -36,10 +36,35 @@ def _fmt_ts(ts):
 def status(store, now=None):
     now = now or time.time()
     heartbeats = store.get_heartbeats()
+    now_minute = int(now // 60)
+    memberships = store.get_collector_memberships()
+    active_collectors = {
+        collector
+        for collector, started_minute, retired_minute
+        in memberships
+        if started_minute <= now_minute
+        and (retired_minute is None or retired_minute > now_minute)
+    }
+    retired_collectors = []
+    for collector in sorted({row[0] for row in memberships} - active_collectors):
+        retired_minutes = [
+            retired_minute
+            for name, started_minute, retired_minute in memberships
+            if name == collector
+            and retired_minute is not None
+            and retired_minute <= now_minute
+        ]
+        if retired_minutes:
+            retired_collectors.append({
+                "name": collector,
+                "retired_ts": max(retired_minutes) * 60,
+            })
     coverage = store.data_coverage()
 
     collectors = []
     for collector, ts, detail, instance_role, expected_interval in heartbeats:
+        if collector not in active_collectors:
+            continue
         age = now - ts
         # New collectors record their actual cadence. Keep role-based
         # fallbacks for databases created by an older version.
@@ -61,7 +86,12 @@ def status(store, now=None):
             "expected_interval": expected,
         })
 
-    return {"collectors": collectors, "coverage": coverage, "now": now}
+    return {
+        "collectors": collectors,
+        "retired_collectors": retired_collectors,
+        "coverage": coverage,
+        "now": now,
+    }
 
 
 def render(result):
@@ -70,9 +100,13 @@ def render(result):
 
     lines.append("Collectors")
     if not result["collectors"]:
-        lines.append("  ✗ NO COLLECTORS HAVE EVER RUN against this database.")
-        lines.append("    Nothing is being recorded. `whyslow` will find nothing.")
-        lines.append("    Start one: WHYSLOW_PG_DSN=... whyslow collect-pg")
+        if result.get("retired_collectors"):
+            lines.append("  ✗ NO ACTIVE COLLECTORS against this database.")
+            lines.append("    Retired collectors are preserved only for historical reports.")
+        else:
+            lines.append("  ✗ NO COLLECTORS HAVE EVER RUN against this database.")
+            lines.append("    Nothing is being recorded. `whyslow` will find nothing.")
+            lines.append("    Start one: WHYSLOW_PG_DSN=... whyslow collect-pg")
     for c in result["collectors"]:
         mark = "✗" if c["stale"] else "✓"
         state = "STALE" if c["stale"] else "alive"
@@ -88,6 +122,13 @@ def render(result):
             + (f"  ({c['detail']})" if c["detail"] else "")
             + role_note
         )
+    if result.get("retired_collectors"):
+        lines.append("")
+        lines.append("Retired collectors (not expected for current coverage)")
+        for collector in result["retired_collectors"]:
+            lines.append(
+                f"  - {collector['name']}  retired {_fmt_ts(collector['retired_ts'])}"
+            )
 
     if any(c.get("instance_role") == "replica" for c in result["collectors"]):
         lines.append("")

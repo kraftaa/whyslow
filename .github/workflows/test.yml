@@ -105,6 +105,9 @@ jobs:
       - name: Coverage-gap + live-duration test (unwatched window must never read as all-clear)
         run: python3 tests/coverage_smoke.py
 
+      - name: Collector join/retirement lifecycle test
+        run: python3 tests/collector_lifecycle_smoke.py
+
       - name: Aurora reader-endpoint misconfiguration test
         run: python3 tests/replica_smoke.py
 

@@ -162,6 +162,19 @@ def cmd_prune(args):
     print(f"[whyslow] pruned old rows: {summary}")
 
 
+def cmd_retire(args):
+    store = Store(args.db)
+    ts = parse_time(args.at) if args.at else time.time()
+    if ts > time.time():
+        store.close()
+        raise SystemExit("collector retirement time cannot be in the future")
+    if not store.retire_collector(args.collector, ts=ts):
+        store.close()
+        raise SystemExit(f"unknown collector: {args.collector}")
+    store.close()
+    print(f"[whyslow] retired collector: {args.collector} at {ts:.0f}")
+
+
 def cmd_diff(args):
     store = Store(args.db)
     incident_start, incident_end = resolve_window(args)
@@ -241,6 +254,18 @@ def main(argv=None):
     p = sub.add_parser("prune", help="delete rows past their retention windows")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.set_defaults(func=cmd_prune)
+
+    p = sub.add_parser(
+        "retire",
+        help="retire a collector without deleting its historical evidence",
+    )
+    p.add_argument("collector", help="collector name shown by status, e.g. puma:web-4")
+    p.add_argument(
+        "--at",
+        help="retirement timestamp (ISO-8601, HH:MM UTC, or epoch); defaults to now",
+    )
+    p.add_argument("--db", default=".whyslow/store.sqlite3")
+    p.set_defaults(func=cmd_retire)
 
     p = sub.add_parser("diff", help="compare a healthy baseline window against an incident window")
     p.add_argument("--last", metavar="DURATION",

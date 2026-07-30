@@ -93,6 +93,16 @@ CREATE TABLE IF NOT EXISTS collector_coverage (
     minute_bucket INTEGER NOT NULL,
     PRIMARY KEY (collector, minute_bucket)
 );
+
+-- Fleet membership is separate from heartbeats: removing a host should
+-- stop future stale/coverage warnings without erasing its historical
+-- evidence. A later heartbeat automatically reactivates it.
+CREATE TABLE IF NOT EXISTS collector_memberships (
+    collector TEXT NOT NULL,
+    started_minute INTEGER NOT NULL,
+    retired_minute INTEGER,
+    PRIMARY KEY (collector, started_minute)
+);
 """
 
 
@@ -165,6 +175,19 @@ class Store:
                         # migration while this connection waited.
                         if "duplicate column" not in str(exc).lower():
                             raise
+        # Backfill one initial membership interval for stores created before
+        # explicit collector retirement existed.
+        self.conn.execute(
+            "INSERT OR IGNORE INTO collector_memberships "
+            "(collector, started_minute, retired_minute) "
+            "SELECT coverage.collector, min(coverage.minute_bucket), NULL "
+            "FROM collector_coverage AS coverage "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM collector_memberships AS membership "
+            "  WHERE membership.collector = coverage.collector"
+            ") "
+            "GROUP BY coverage.collector"
+        )
         self.conn.commit()
 
     # ---- writes (collectors call these) ----
@@ -333,7 +356,40 @@ class Store:
             "INSERT OR IGNORE INTO collector_coverage (collector, minute_bucket) VALUES (?,?)",
             (collector, int(ts // 60)),
         )
+        minute = int(ts // 60)
+        active_membership = self.conn.execute(
+            "SELECT 1 FROM collector_memberships "
+            "WHERE collector = ? AND retired_minute IS NULL LIMIT 1",
+            (collector,),
+        ).fetchone()
+        if active_membership is None:
+            latest_retired = self.conn.execute(
+                "SELECT max(retired_minute) FROM collector_memberships "
+                "WHERE collector = ?",
+                (collector,),
+            ).fetchone()[0]
+            # A delayed historical heartbeat from inside a retired period
+            # must not reactivate the collector in the present.
+            if latest_retired is None or minute >= latest_retired:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO collector_memberships "
+                    "(collector, started_minute, retired_minute) VALUES (?,?,NULL)",
+                    (collector, minute),
+                )
         self.conn.commit()
+
+    def retire_collector(self, collector, ts=None):
+        """Retire a known collector without deleting historical evidence."""
+        ts = ts or time.time()
+        minute = int(ts // 60)
+        cur = self.conn.execute(
+            "UPDATE collector_memberships SET retired_minute = ? "
+            "WHERE collector = ? AND retired_minute IS NULL "
+            "AND started_minute <= ?",
+            (minute, collector, minute),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
 
     def coverage_in(self, start_ts, end_ts):
         """Per-collector coverage across a window.
@@ -356,24 +412,52 @@ class Store:
             "WHERE minute_bucket BETWEEN ? AND ? GROUP BY collector",
             (start_bucket, end_bucket),
         ).fetchall())
-        known_collectors = self.conn.execute(
-            "SELECT collector, min(minute_bucket) FROM collector_coverage "
-            "GROUP BY collector"
+        membership_rows = self.conn.execute(
+            "SELECT collector, started_minute, retired_minute "
+            "FROM collector_memberships ORDER BY collector, started_minute"
         ).fetchall()
+        memberships = {}
+        for name, started_minute, retired_minute in membership_rows:
+            memberships.setdefault(name, []).append(
+                {
+                    "started_minute": started_minute,
+                    "retired_minute": retired_minute,
+                }
+            )
+
+        expected_by_collector = {}
+        for name, periods in memberships.items():
+            expected = 0
+            for period in periods:
+                period_start = max(start_bucket, period["started_minute"])
+                # Retirement is exclusive: that minute is the first minute
+                # in which the collector is no longer expected.
+                period_end = min(
+                    end_bucket,
+                    period["retired_minute"] - 1
+                    if period["retired_minute"] is not None
+                    else end_bucket,
+                )
+                expected += max(period_end - period_start + 1, 0)
+            if expected:
+                expected_by_collector[name] = expected
+
+        details = {}
+        for name, count in per_collector.items():
+            expected = expected_by_collector.get(name, total)
+            details[name] = {
+                "minutes": count,
+                "expected_minutes": expected,
+                "fraction": min(count / expected, 1.0),
+            }
 
         return {
             "total_minutes": total,
-            "per_collector": {
-                name: {"minutes": count, "fraction": count / total}
-                for name, count in per_collector.items()
+            "per_collector": details,
+            "expected_collectors": {
+                name: {"expected_minutes": expected}
+                for name, expected in expected_by_collector.items()
             },
-            # The first observed minute lets historical reports ignore a
-            # target that had not joined the fleet yet.
-            "known_collectors": {
-                name: {"first_minute": first_minute}
-                for name, first_minute in known_collectors
-            },
-            "end_bucket": end_bucket,
         }
 
     def get_heartbeats(self):
@@ -381,6 +465,12 @@ class Store:
             "SELECT collector, ts, detail, instance_role, expected_interval "
             "FROM collector_heartbeats "
             "ORDER BY collector"
+        ).fetchall()
+
+    def get_collector_memberships(self):
+        return self.conn.execute(
+            "SELECT collector, started_minute, retired_minute "
+            "FROM collector_memberships ORDER BY collector, started_minute"
         ).fetchall()
 
     def data_coverage(self):

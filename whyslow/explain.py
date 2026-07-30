@@ -376,16 +376,14 @@ COVERAGE_OK_THRESHOLD = 0.9
 def _assess_coverage(raw, db_instance_role=None):
     """Turn raw per-collector minute counts into per-role verdicts."""
     per_collector = raw["per_collector"]
-    known_collectors = raw.get("known_collectors", {})
-    end_bucket = raw.get("end_bucket")
+    expected_collectors = raw.get("expected_collectors", {})
     roles = {}
     for role, matcher, describes in COLLECTOR_ROLES:
         matching_names = {name for name in per_collector if matcher(name)}
         matching_names.update(
             name
-            for name, detail in known_collectors.items()
+            for name in expected_collectors
             if matcher(name)
-            and (end_bucket is None or detail["first_minute"] <= end_bucket)
         )
         matching = {
             name: per_collector.get(name, {"minutes": 0, "fraction": 0.0})

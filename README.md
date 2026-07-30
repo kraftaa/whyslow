@@ -237,7 +237,9 @@ than trusting it.
 Puma coverage is also evaluated across the full known fleet. Every
 target that existed during the requested window must meet the coverage
 threshold; one healthy web host cannot hide a missing peer. Historical
-reports ignore targets that had not joined the fleet yet.
+reports ignore targets that had not joined the fleet yet or had already
+been explicitly retired. Run `whyslow retire puma:HOST` during planned
+scale-down; a later heartbeat automatically reactivates that collector.
 
 ### Round: an unwatched window read as an all-clear
 

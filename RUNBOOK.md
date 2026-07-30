@@ -42,6 +42,18 @@ Then verify it's actually working, and check again occasionally:
 whyslow status     # exits non-zero if any collector is stale
 ```
 
+When a Puma host is deliberately removed from service, retire its
+collector after stopping the systemd instance:
+
+```bash
+systemctl disable --now whyslow-collect-puma@web-4
+whyslow retire puma:web-4 --db /var/lib/whyslow/store.sqlite3
+```
+
+This preserves old incident coverage while removing the host from
+future fleet expectations. If the collector starts sending heartbeats
+again, it is reactivated automatically.
+
 Also add these two one-liners, they cost nothing and pay off later:
 
 ```yaml
