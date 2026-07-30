@@ -45,9 +45,10 @@ def summarize_window(store, start_ts, end_ts):
         label = label_query(blocking_query)
         if label:
             maintenance_labels.add(label)
-        if ended_ts:
-            held = ended_ts - ts
-            longest_block = held if longest_block is None else max(longest_block, held)
+        # Summarize duration as of this window, rather than leaking a later
+        # resolution into an earlier historical comparison.
+        held = min(ended_ts, end_ts) - ts if ended_ts else end_ts - ts
+        longest_block = held if longest_block is None else max(longest_block, held)
 
     max_backlog = max((row[2] for row in puma), default=None)  # ts, host, backlog, ...
     cpu_values = [row[2] for row in cw if row[1] == "CPUUtilization"]

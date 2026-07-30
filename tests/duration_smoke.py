@@ -166,3 +166,54 @@ tw2.join()
 conn2.close()
 store2.close()
 print("PASS: in-progress blocking chain is captured even when the collector starts mid-incident")
+
+
+# --- Regression: a long-running block that began before the requested
+# window must still appear, with its state reconstructed as of that
+# window rather than using knowledge of its later resolution.
+print("\n--- regression: block overlaps a later historical window ---")
+shutil.rmtree("/tmp/duration_smoke_overlap", ignore_errors=True)
+store3 = Store("/tmp/duration_smoke_overlap/store.sqlite3")
+block_start = time.time() - 1200
+block_end = block_start + 900
+store3.write_blocking_edges(
+    [(700, "web-7", 600, "batch", "analytics_role", "REINDEX TABLE orders")],
+    ts=block_start,
+)
+store3.mark_blocking_edges_ended({(700, 600)}, ts=block_end)
+store3.write_puma_stat(
+    host="web-7",
+    backlog=9,
+    pool_capacity=0,
+    max_threads=16,
+    running=16,
+    rss_mb=None,
+    ts=block_start + 450,
+)
+
+window_start = block_start + 300
+window_end = block_start + 600
+result3 = explain_mod.explain(store3, window_start, window_end)
+out3 = explain_mod.render(result3, window_start, window_end)
+print(out3)
+
+blocking3 = [c for c in result3["contributors"] if c["category"] == "blocking"]
+assert blocking3, "a block spanning the entire window must not disappear"
+b3 = blocking3[0]
+assert b3["still_active"], "the block was active at this historical window's end"
+assert not b3["currently_unresolved"], "the store knows it resolved later"
+assert 599 < b3["held_seconds"] < 601
+assert "already active at window start" in out3
+assert "Puma backlog spike on web-7" in out3, (
+    "corroboration during a continuing block must not require proximity to its old start"
+)
+assert "pg_cancel_backend(600)" not in out3, (
+    "a historical block known to have resolved later must not get a live kill command"
+)
+
+result4 = explain_mod.explain(store3, block_start + 300, block_start + 950)
+b4 = [c for c in result4["contributors"] if c["category"] == "blocking"][0]
+assert not b4["still_active"], "the later window includes the known resolution"
+assert 899 < b4["held_seconds"] < 901
+store3.close()
+print("PASS: overlapping locks remain visible with window-correct state and remediation")

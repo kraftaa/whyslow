@@ -277,11 +277,18 @@ class Store:
         ).fetchall()
 
     def blocking_edges_in(self, start_ts, end_ts):
+        """Blocking intervals that overlap the requested window.
+
+        Filtering only on the edge's start timestamp hides a long-running
+        block from every window after the one in which it began.
+        """
         return self.conn.execute(
             "SELECT ts, blocked_pid, blocked_app, blocking_pid, blocking_app, "
             "blocking_usename, blocking_query, ended_ts "
-            "FROM blocking_edges WHERE ts BETWEEN ? AND ? ORDER BY ts",
-            (start_ts, end_ts),
+            "FROM blocking_edges "
+            "WHERE ts <= ? AND (ended_ts IS NULL OR ended_ts >= ?) "
+            "ORDER BY ts",
+            (end_ts, start_ts),
         ).fetchall()
 
     def puma_stats_in(self, start_ts, end_ts):

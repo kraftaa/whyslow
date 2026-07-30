@@ -264,6 +264,14 @@ reports ignore targets that had not joined the fleet yet.
   support the runbook's own "kill it, or wait if it's nearly done"
   decision. Now reports elapsed-so-far: `held=240s+ and counting`.
 
+- **Long-running blocks could disappear from later windows.** Blocking
+  rows were selected only when their start timestamp fell inside the
+  requested window. They are now treated as intervals: a block that
+  began earlier but remained active is included, correlated with
+  evidence observed while it was active, and rendered using its state
+  at the requested window end. A block known to have resolved later
+  does not receive a dangerous live PID termination suggestion.
+
 ### Round: writing the runbook exposed three gaps
 
 Writing [RUNBOOK.md](RUNBOOK.md) — what to actually type at 2am — turned

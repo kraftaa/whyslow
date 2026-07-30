@@ -90,13 +90,21 @@ def build_timeline(store, start_ts, end_ts):
         ts, blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_user, blocking_query, ended_ts = row
         label = label_query(blocking_query)
         blocker_desc = f"{blocking_user} ({label})" if label else f"{blocking_user or blocking_pid}"
-        dur = f" [held {ended_ts - ts:.0f}s]" if ended_ts else " [still active at window end]"
+        active_at_window_end = ended_ts is None or ended_ts > end_ts
+        if active_at_window_end:
+            dur = f" [still active at window end; held at least {end_ts - ts:.0f}s]"
+        else:
+            dur = f" [held {ended_ts - ts:.0f}s]"
+        prefix = "already active at window start: " if ts < start_ts else ""
         timeline.append((
-            ts,
-            f"pid {blocked_pid} ({blocked_app or 'unknown host'}) blocked_by pid {blocking_pid} [{blocker_desc}]{dur}",
+            max(ts, start_ts),
+            f"{prefix}pid {blocked_pid} ({blocked_app or 'unknown host'}) "
+            f"blocked_by pid {blocking_pid} [{blocker_desc}]{dur}",
             {"kind": "blocking_edge", "blocked_pid": blocked_pid, "blocked_app": blocked_app,
              "blocking_pid": blocking_pid, "blocking_user": blocking_user,
-             "blocking_query": blocking_query, "ended_ts": ended_ts},
+             "blocking_query": blocking_query, "started_ts": ts,
+             "ended_ts": ended_ts, "active_at_window_end": active_at_window_end,
+             "currently_unresolved": ended_ts is None, "window_end_ts": end_ts},
         ))
 
     for ts, host, backlog, pool_capacity, max_threads, running, rss_mb in store.puma_stats_in(start_ts, end_ts):
@@ -155,13 +163,13 @@ def check_blocking_signals(candidate_key, candidate_data, timeline):
         blocked_apps.add(meta.get("blocked_app"))
         blocking_query = meta.get("blocking_query") or blocking_query
 
-    edge_ts_list = [ts for ts, _ in edges]
+    edge_ts_list = [meta.get("started_ts", ts) for ts, meta in edges]
 
     # Signal 1: Puma backlog rose on some host near the same time.
     backlog_hit = None
     for ts, _, meta in timeline:
         if meta.get("kind") == "puma" and (meta.get("backlog") or 0) > 0:
-            if any(_near(ts, e) for e in edge_ts_list):
+            if any(_point_overlaps_edge(ts, edge_meta) for _, edge_meta in edges):
                 backlog_hit = (ts, meta["host"])
                 break
     if backlog_hit:
@@ -185,6 +193,17 @@ def check_blocking_signals(candidate_key, candidate_data, timeline):
         signals.append(f"external event nearby: {event_hit}")
 
     return signals
+
+
+def _point_overlaps_edge(ts, edge_meta, window=COOCCURRENCE_WINDOW_SECONDS):
+    """Whether point evidence occurred while a blocking edge was active."""
+    start = edge_meta.get("started_ts")
+    end = edge_meta.get("ended_ts")
+    if start is None:
+        return False
+    if end is None:
+        end = edge_meta.get("window_end_ts", start)
+    return start - window <= ts <= end + window
 
 
 def _nearest_event(timeline, reference_ts_list):
@@ -282,21 +301,24 @@ def explain(store, start_ts, end_ts):
             # done" -- that decision needs the pid and the duration, so
             # attach both to the contributor rather than making someone
             # hunt through the timeline mid-incident.
-            starts = [ts for ts, _ in data["edges"]]
+            starts = [meta.get("started_ts", ts) for ts, meta in data["edges"]]
             ends = [m.get("ended_ts") for _, m in data["edges"]]
-            resolved = [e for e in ends if e]
+            still_active = any(
+                m.get("active_at_window_end")
+                for _, m in data["edges"]
+            )
+            currently_unresolved = any(
+                m.get("currently_unresolved")
+                for _, m in data["edges"]
+            )
 
-            # If every edge resolved, report the real held time. If any are
-            # still active, report elapsed-so-far against the window end --
-            # during a LIVE incident (the primary use case) nothing has
-            # resolved yet, and "ongoing" with no number can't support the
-            # runbook's kill-it-or-wait-it-out decision.
-            if resolved and len(resolved) == len(ends):
-                held_seconds = max(resolved) - min(starts)
-                still_active = False
-            else:
+            # Report state as of the requested window end. A historical
+            # block may have resolved later, but it was still active at the
+            # moment being reconstructed.
+            if still_active:
                 held_seconds = end_ts - min(starts)
-                still_active = True
+            else:
+                held_seconds = max(e for e in ends if e is not None) - min(starts)
 
             contributors.append({
                 "name": name,
@@ -304,6 +326,7 @@ def explain(store, start_ts, end_ts):
                 "pid": pid,
                 "held_seconds": held_seconds,
                 "still_active": still_active,
+                "currently_unresolved": currently_unresolved,
                 "blocked_count": len({m.get("blocked_pid") for _, m in data["edges"]}),
                 "signals": signals,
                 "signals_possible": BLOCKING_SIGNAL_COUNT,
@@ -555,7 +578,12 @@ def render(result, start_ts, end_ts):
         if c.get("pid") is not None:
             extra += f"  pid={c['pid']}"
         if c.get("held_seconds") is not None:
-            suffix = "+ and counting" if c.get("still_active") else ""
+            if c.get("still_active") and c.get("currently_unresolved"):
+                suffix = "+ and counting"
+            elif c.get("still_active"):
+                suffix = "+ at window end"
+            else:
+                suffix = ""
             extra += f"  held={c['held_seconds']:.0f}s{suffix}"
         if c.get("blocked_count"):
             extra += f"  blocking={c['blocked_count']} session(s)"
@@ -577,7 +605,9 @@ def render(result, start_ts, end_ts):
     # that number may now belong to an entirely different session.
     ongoing = [
         c for c in result["contributors"]
-        if c["category"] == "blocking" and c.get("still_active") and c.get("pid")
+        if c["category"] == "blocking"
+        and c.get("currently_unresolved")
+        and c.get("pid")
     ]
     if ongoing:
         lines.append("")
