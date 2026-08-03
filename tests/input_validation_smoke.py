@@ -53,6 +53,13 @@ invalid_commands = [
         "collect-cw", "--db-instance-id", "bad--identifier", "--db", DB,
     ),
     (
+        "collect-cw", "--db-cluster-id", "bad--cluster", "--db", DB,
+    ),
+    (
+        "collect-cw", "--db-cluster-id", "cluster-1",
+        "--db-instance-id", "writer-1", "--db", DB,
+    ),
+    (
         "collect-cw", "--db-instance-id", "writer-1", "--interval", "3601",
         "--db", DB,
     ),

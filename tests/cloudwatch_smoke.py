@@ -18,6 +18,18 @@ DB_PATH = "/tmp/cw_smoke/store.sqlite3"
 shutil.rmtree("/tmp/cw_smoke", ignore_errors=True)
 
 
+class FakeRDS:
+    def __init__(self, writer):
+        self.writer = writer
+
+    def describe_db_clusters(self, DBClusterIdentifier):
+        assert DBClusterIdentifier == "my-aurora-cluster"
+        return {"DBClusters": [{"DBClusterMembers": [
+            {"DBInstanceIdentifier": self.writer, "IsClusterWriter": True},
+            {"DBInstanceIdentifier": "reader-a", "IsClusterWriter": False},
+        ]}]}
+
+
 @mock_aws
 def run():
     from whyslow.collector_cloudwatch import CloudWatchCollector
@@ -33,14 +45,14 @@ def run():
         MetricData=[
             {
                 "MetricName": "CPUUtilization",
-                "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": "my-aurora-cluster"}],
+                "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": "writer-a"}],
                 "Timestamp": metric_time,
                 "Value": 91.0,
                 "Unit": "Percent",
             },
             {
                 "MetricName": "DatabaseConnections",
-                "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": "my-aurora-cluster"}],
+                "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": "writer-a"}],
                 "Timestamp": metric_time,
                 "Value": 104.0,
                 "Unit": "Count",
@@ -49,7 +61,15 @@ def run():
     )
 
     store = Store(DB_PATH)
-    collector = CloudWatchCollector("my-aurora-cluster", store, region="us-east-1")
+    rds = FakeRDS("writer-a")
+    collector = CloudWatchCollector(
+        None,
+        store,
+        region="us-east-1",
+        db_cluster_id="my-aurora-cluster",
+        cloudwatch_client=client,
+        rds_client=rds,
+    )
     results = collector.poll_once()
     print(f"poll_once() returned: {results}")
 
@@ -62,17 +82,37 @@ def run():
     collector.poll_once()
 
     rows = store.cloudwatch_metrics_in(0, time.time() + 1)
-    metrics_stored = {m: v for _, m, v in rows}
+    metrics_stored = {m: v for _, m, v, _ in rows}
     assert metrics_stored.get("CPUUtilization") == 91.0
     assert metrics_stored.get("DatabaseConnections") == 104.0
     assert len(rows) == 2, f"overlapping polls duplicated CloudWatch rows: {rows}"
-    for stored_ts, _, _ in rows:
+    assert {source for _, _, _, source in rows} == {"writer-a"}
+    for stored_ts, _, _, _ in rows:
         assert abs(stored_ts - metric_time.timestamp()) < 1, (
             "must store the CloudWatch measurement timestamp, not collection time"
         )
+    # Simulate an Aurora failover. The next poll must resolve the new writer
+    # instead of continuing to query the instance that was primary at start.
+    rds.writer = "writer-b"
+    client.put_metric_data(
+        Namespace="AWS/RDS",
+        MetricData=[{
+            "MetricName": "CPUUtilization",
+            "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": "writer-b"}],
+            "Timestamp": metric_time,
+            "Value": 37.0,
+            "Unit": "Percent",
+        }],
+    )
+    failed_over = collector.poll_once()
+    assert failed_over.get("CPUUtilization") == 37.0, failed_over
+    rows = store.cloudwatch_metrics_in(0, time.time() + 1)
+    assert ("writer-b", 37.0) in {(source, value) for _, _, value, source in rows}
+    assert len(rows) == 3, rows
+    assert store.latest_cloudwatch_source() == "writer-b"
     store.close()
 
-    print("\nPASS: CloudWatch metrics retain real timestamps and overlapping polls deduplicate")
+    print("\nPASS: CloudWatch metrics follow Aurora failover and retain source provenance")
 
 
 run()

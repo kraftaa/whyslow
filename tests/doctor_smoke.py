@@ -23,6 +23,18 @@ DB_PATH = f"{ROOT}/store.sqlite3"
 DSN = "dbname=postgres user=postgres password=postgres host=127.0.0.1"
 shutil.rmtree(ROOT, ignore_errors=True)
 
+
+class FakeRDS:
+    def __init__(self, writer):
+        self.writer = writer
+
+    def describe_db_clusters(self, DBClusterIdentifier):
+        assert DBClusterIdentifier == "doctor-cluster"
+        return {"DBClusters": [{"DBClusterMembers": [{
+            "DBInstanceIdentifier": self.writer,
+            "IsClusterWriter": True,
+        }]}]}
+
 store = Store(DB_PATH)
 now = time.time()
 store.write_heartbeat(
@@ -73,8 +85,48 @@ with mock_aws():
             "Unit": "Percent",
         }],
     )
-    cloudwatch_check = doctor_mod._check_cloudwatch("doctor-db", "us-east-1")
+    cloudwatch_check = doctor_mod._check_cloudwatch("doctor-db", "us-east-1")[0]
     assert cloudwatch_check["state"] == "pass", cloudwatch_check
+    fixed_checks = doctor_mod._check_cloudwatch("doctor-db", "us-east-1")
+    assert next(c for c in fixed_checks if c["name"] == "cloudwatch_failover")["state"] == "warn"
+
+    metric_time = time.time() - 180
+    for writer in ("writer-a", "writer-b"):
+        cloudwatch.put_metric_data(
+            Namespace="AWS/RDS",
+            MetricData=[{
+                "MetricName": "CPUUtilization",
+                "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": writer}],
+                "Timestamp": metric_time,
+                "Value": 42.0,
+                "Unit": "Percent",
+            }],
+        )
+    store.write_cloudwatch_metric(
+        "CPUUtilization", 42.0, ts=metric_time, source_instance="writer-a"
+    )
+    rds = FakeRDS("writer-a")
+    cluster_checks = doctor_mod._check_cloudwatch(
+        None,
+        "us-east-1",
+        db_cluster_id="doctor-cluster",
+        store=store,
+        cloudwatch_client=cloudwatch,
+        rds_client=rds,
+    )
+    assert all(c["state"] == "pass" for c in cluster_checks), cluster_checks
+
+    rds.writer = "writer-b"
+    stale_checks = doctor_mod._check_cloudwatch(
+        None,
+        "us-east-1",
+        db_cluster_id="doctor-cluster",
+        store=store,
+        cloudwatch_client=cloudwatch,
+        rds_client=rds,
+    )
+    provenance = next(c for c in stale_checks if c["name"] == "cloudwatch_provenance")
+    assert provenance["state"] == "fail", stale_checks
 
 # Permission regressions are failures, not cosmetic warnings.
 os.chmod(DB_PATH, 0o644)

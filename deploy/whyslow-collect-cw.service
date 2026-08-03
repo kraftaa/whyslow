@@ -9,11 +9,11 @@ Type=simple
 User=whyslow
 Group=whyslow
 
-# Define WHYSLOW_DB_INSTANCE_ID and the standard AWS region/credential
+# Define WHYSLOW_DB_CLUSTER_ID and the standard AWS region/credential
 # environment variables in a root-owned 0600 file.
 EnvironmentFile=/etc/whyslow/cloudwatch.env
 ExecStart=/usr/local/bin/whyslow collect-cw \
-    --db-instance-id ${WHYSLOW_DB_INSTANCE_ID} \
+    --db-cluster-id ${WHYSLOW_DB_CLUSTER_ID} \
     --db /var/lib/whyslow/store.sqlite3 \
     --interval 60.0
 

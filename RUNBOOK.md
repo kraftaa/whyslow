@@ -16,6 +16,7 @@ wrong.
 # Run all of these on ONE collector host against ONE SQLite file.
 # Postgres must use the WRITER endpoint.
 export WHYSLOW_PG_DSN="postgresql://user:pass@writer-endpoint/db"
+export WHYSLOW_DB_CLUSTER_ID="my-aurora-cluster"
 whyslow collect-pg --db /var/lib/whyslow/store.sqlite3
 
 # Repeat for each private Puma control endpoint reachable from this host.
@@ -23,7 +24,7 @@ whyslow collect-puma --host-name web-3 \
   --stats-url https://web-3.internal:9293/stats \
   --db /var/lib/whyslow/store.sqlite3
 
-whyslow collect-cw --db-instance-id my-aurora-writer-instance \
+whyslow collect-cw --db-cluster-id "$WHYSLOW_DB_CLUSTER_ID" \
   --db /var/lib/whyslow/store.sqlite3
 ```
 
@@ -34,9 +35,14 @@ built-in monitoring role once:
 GRANT pg_read_all_stats TO whyslow_user;
 ```
 
-For CloudWatch, `--db-instance-id` must be the current RDS **instance**
-identifier, not an Aurora cluster identifier. `whyslow doctor` fails if
-the configured dimension returns no recent CPU datapoints.
+For Aurora, pass the **cluster** identifier. The collector calls
+`DescribeDBClusters` before every poll and reads CloudWatch from the member
+marked as the current writer, so a failover does not require reconfiguration
+or a restart. Its IAM principal needs `rds:DescribeDBClusters` and
+`cloudwatch:GetMetricStatistics`. Each datapoint records its source instance;
+`whyslow doctor` fails if the latest recorded source no longer matches the
+cluster's current writer. `--db-instance-id` is retained only for standalone
+RDS or compatibility use and does not follow Aurora failovers.
 
 Do not run these against separate local stores on each web server: the
 tool cannot correlate timelines split across files. Use the systemd units

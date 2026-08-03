@@ -136,8 +136,12 @@ def build_timeline(store, start_ts, end_ts):
             {"kind": "puma", "host": host, "backlog": backlog},
         ))
 
-    for ts, metric, value in store.cloudwatch_metrics_in(start_ts, end_ts):
-        timeline.append((ts, f"CloudWatch {metric}: {value}", {"kind": "cloudwatch", "metric": metric, "value": value}))
+    for ts, metric, value, source_instance in store.cloudwatch_metrics_in(start_ts, end_ts):
+        source = f" [{source_instance}]" if source_instance else ""
+        timeline.append((ts, f"CloudWatch {metric}: {value}{source}", {
+            "kind": "cloudwatch", "metric": metric, "value": value,
+            "source_instance": source_instance,
+        }))
 
     for ts, source, kind, payload in store.events_in(start_ts, end_ts):
         timeline.append((ts, f"{source} event: {kind} {payload or ''}".strip(), {"kind": "event"}))
@@ -277,10 +281,14 @@ def check_resource_signals(timeline, resource_buckets):
                 meta["value"] >= CPU_ALERT_THRESHOLD
                 and any(_cloudwatch_overlaps_spike(ts, spike) for spike in resource_spikes)
             ):
-                cw_alert = (ts, meta["value"])
+                cw_alert = (ts, meta["value"], meta.get("source_instance"))
                 break
     if cw_alert:
-        signals.append(f"CloudWatch CPUUtilization {cw_alert[1]:.0f}% at t={cw_alert[0]:.0f}")
+        source = f" on {cw_alert[2]}" if cw_alert[2] else ""
+        signals.append(
+            f"CloudWatch CPUUtilization {cw_alert[1]:.0f}%{source} "
+            f"at t={cw_alert[0]:.0f}"
+        )
 
     backlog_hit = None
     for ts, _, meta in timeline:

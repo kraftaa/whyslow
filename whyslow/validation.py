@@ -13,7 +13,7 @@ MAX_EVENT_PAYLOAD_CHARS = 4096
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _HOST_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_RDS_INSTANCE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,62}$")
+_RDS_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,62}$")
 
 
 def validate_interval(value):
@@ -43,17 +43,25 @@ def validate_host_name(value):
     return value
 
 
-def validate_rds_instance_id(value):
+def _validate_rds_identifier(value, label):
     if (
-        not _RDS_INSTANCE_ID.fullmatch(value)
+        not _RDS_IDENTIFIER.fullmatch(value)
         or value.endswith("-")
         or "--" in value
     ):
         raise ValueError(
-            "RDS instance identifier must start with a letter, end with a letter or digit, "
+            f"{label} must start with a letter, end with a letter or digit, "
             "contain only letters, digits, and single hyphens, and be at most 63 characters"
         )
     return value
+
+
+def validate_rds_instance_id(value):
+    return _validate_rds_identifier(value, "RDS instance identifier")
+
+
+def validate_rds_cluster_id(value):
+    return _validate_rds_identifier(value, "RDS cluster identifier")
 
 
 def validate_http_url(value):

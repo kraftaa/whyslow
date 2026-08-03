@@ -47,6 +47,9 @@ heartbeat_cols_before = {
     r[1] for r in old_conn.execute("PRAGMA table_info(collector_heartbeats)").fetchall()
 }
 assert "expected_interval" not in heartbeat_cols_before
+old_conn.execute("CREATE TABLE cloudwatch_metrics (ts REAL, metric TEXT, value REAL)")
+old_conn.execute("INSERT INTO cloudwatch_metrics VALUES (1, 'CPUUtilization', 42)")
+old_conn.commit()
 old_conn.close()
 
 # Opening with the current Store must migrate in place, not crash and not
@@ -61,6 +64,11 @@ heartbeat_cols_after = {
 }
 assert "expected_interval" in heartbeat_cols_after
 assert "instance_role" in heartbeat_cols_after
+cloudwatch_cols_after = {
+    r[1] for r in store.conn.execute("PRAGMA table_info(cloudwatch_metrics)").fetchall()
+}
+assert "source_instance" in cloudwatch_cols_after
+assert store.cloudwatch_metrics_in(0, 2) == [(1.0, "CPUUtilization", 42.0, None)]
 assert store.schema_version() == SCHEMA_VERSION
 stored_version = store.conn.execute(
     "SELECT value FROM schema_metadata WHERE key = 'schema_version'"

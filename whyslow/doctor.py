@@ -10,7 +10,12 @@ from datetime import datetime, timedelta, timezone
 
 from . import status as status_mod
 from .storage import SCHEMA_VERSION
-from .validation import validate_http_url, validate_rds_instance_id
+from .collector_cloudwatch import resolve_cluster_writer
+from .validation import (
+    validate_http_url,
+    validate_rds_cluster_id,
+    validate_rds_instance_id,
+)
 
 
 MIN_FREE_BYTES = 100 * 1024 * 1024
@@ -18,7 +23,7 @@ REQUIRED_SCHEMA = {
     "session_changes": {"ts", "pid", "category", "query"},
     "blocking_edges": {"ts", "blocked_pid", "blocking_pid", "blocking_query", "ended_ts"},
     "puma_stats": {"ts", "host", "backlog", "pool_capacity"},
-    "cloudwatch_metrics": {"ts", "metric", "value"},
+    "cloudwatch_metrics": {"ts", "metric", "value", "source_instance"},
     "events": {"ts", "source", "kind", "payload"},
     "collector_heartbeats": {"collector", "ts", "expected_interval", "instance_role"},
     "collector_coverage": {"collector", "minute_bucket"},
@@ -32,14 +37,16 @@ def _check(name, state, detail):
 
 
 def doctor(store, *, dsn=None, puma_url=None, puma_token=None,
-           db_instance_id=None, region=None, now=None):
+           db_cluster_id=None, db_instance_id=None, region=None, now=None):
     now = now or time.time()
     checks = []
     checks.extend(_check_store(store))
     checks.extend(_check_collectors(store, now))
     checks.append(_check_postgres(dsn))
     checks.append(_check_puma(puma_url, puma_token))
-    checks.append(_check_cloudwatch(db_instance_id, region))
+    checks.extend(_check_cloudwatch(
+        db_instance_id, region, db_cluster_id=db_cluster_id, store=store
+    ))
     return {
         "ok": not any(check["state"] == "fail" for check in checks),
         "checks": checks,
@@ -210,14 +217,28 @@ def _check_puma(url, token):
         return _check("puma_endpoint", "fail", _safe_error(exc))
 
 
-def _check_cloudwatch(db_instance_id, region):
-    if not db_instance_id:
-        return _check("cloudwatch_api", "warn", "not checked; set WHYSLOW_DB_INSTANCE_ID")
+def _check_cloudwatch(db_instance_id, region, *, db_cluster_id=None, store=None,
+                      cloudwatch_client=None, rds_client=None):
+    if not db_instance_id and not db_cluster_id:
+        return [_check(
+            "cloudwatch_api", "warn",
+            "not checked; set WHYSLOW_DB_CLUSTER_ID (Aurora) or WHYSLOW_DB_INSTANCE_ID",
+        )]
+    if db_instance_id and db_cluster_id:
+        return [_check(
+            "cloudwatch_api", "fail",
+            "configure only one of WHYSLOW_DB_CLUSTER_ID or WHYSLOW_DB_INSTANCE_ID",
+        )]
     try:
-        db_instance_id = validate_rds_instance_id(db_instance_id)
         import boto3
 
-        client = boto3.client("cloudwatch", region_name=region)
+        client = cloudwatch_client or boto3.client("cloudwatch", region_name=region)
+        if db_cluster_id:
+            db_cluster_id = validate_rds_cluster_id(db_cluster_id)
+            rds = rds_client or boto3.client("rds", region_name=region)
+            db_instance_id = resolve_cluster_writer(rds, db_cluster_id)
+        else:
+            db_instance_id = validate_rds_instance_id(db_instance_id)
         end = datetime.now(timezone.utc) - timedelta(minutes=2)
         response = client.get_metric_statistics(
             Namespace="AWS/RDS",
@@ -229,16 +250,39 @@ def _check_cloudwatch(db_instance_id, region):
             Statistics=["Average"],
         )
         count = len(response.get("Datapoints", []))
-        return _check(
+        checks = [_check(
             "cloudwatch_api",
             "pass" if count else "fail",
-            f"API reachable; {count} CPU datapoint(s)" if count
+            f"API reachable; writer={db_instance_id}; {count} CPU datapoint(s)" if count
             else "API reachable but no recent CPU datapoints; verify the DB instance identifier",
-        )
+        )]
+        if db_cluster_id and store is not None:
+            recorded = store.latest_cloudwatch_source()
+            if recorded is None:
+                checks.append(_check(
+                    "cloudwatch_provenance", "warn",
+                    f"current writer={db_instance_id}; no sourced metrics recorded yet",
+                ))
+            elif recorded == db_instance_id:
+                checks.append(_check(
+                    "cloudwatch_provenance", "pass",
+                    f"latest metrics match current writer={db_instance_id}",
+                ))
+            else:
+                checks.append(_check(
+                    "cloudwatch_provenance", "fail",
+                    f"latest metrics came from {recorded}; current writer={db_instance_id}",
+                ))
+        elif db_instance_id:
+            checks.append(_check(
+                "cloudwatch_failover", "warn",
+                "fixed instance mode does not follow Aurora writer failovers",
+            ))
+        return checks
     except ImportError:
-        return _check("cloudwatch_api", "fail", "install whyslow[cloudwatch]")
+        return [_check("cloudwatch_api", "fail", "install whyslow[cloudwatch]")]
     except Exception as exc:
-        return _check("cloudwatch_api", "fail", _safe_error(exc))
+        return [_check("cloudwatch_api", "fail", _safe_error(exc))]
 
 
 def _safe_error(exc):

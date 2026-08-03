@@ -21,6 +21,7 @@ from .validation import (
     validate_http_url,
     validate_identifier,
     validate_interval,
+    validate_rds_cluster_id,
     validate_rds_instance_id,
     validate_text,
 )
@@ -62,6 +63,7 @@ host_name_arg = _arg_value(validate_host_name)
 stats_url_arg = _arg_value(validate_http_url)
 collector_name_arg = _arg_value(validate_identifier, "collector name")
 rds_instance_id_arg = _arg_value(validate_rds_instance_id)
+rds_cluster_id_arg = _arg_value(validate_rds_cluster_id)
 
 
 def _is_clock_time(s):
@@ -163,7 +165,13 @@ def cmd_collect_puma(args):
 def cmd_collect_cw(args):
     from .collector_cloudwatch import CloudWatchCollector
     store = Store(args.db)
-    collector = CloudWatchCollector(args.db_instance_id, store, interval=args.interval, region=args.region)
+    collector = CloudWatchCollector(
+        args.db_instance_id,
+        store,
+        interval=args.interval,
+        region=args.region,
+        db_cluster_id=args.db_cluster_id,
+    )
     collector.run_forever()
 
 
@@ -220,12 +228,19 @@ def cmd_doctor(args):
     from . import doctor as doctor_mod
 
     store = Store(args.db)
+    db_cluster_id = args.db_cluster_id
+    db_instance_id = args.db_instance_id
+    if not db_cluster_id and not db_instance_id:
+        db_cluster_id = os.environ.get("WHYSLOW_DB_CLUSTER_ID")
+        if not db_cluster_id:
+            db_instance_id = os.environ.get("WHYSLOW_DB_INSTANCE_ID")
     result = doctor_mod.doctor(
         store,
         dsn=os.environ.get("WHYSLOW_PG_DSN"),
         puma_url=os.environ.get("WHYSLOW_PUMA_STATS_URL"),
         puma_token=os.environ.get("WHYSLOW_PUMA_TOKEN"),
-        db_instance_id=args.db_instance_id or os.environ.get("WHYSLOW_DB_INSTANCE_ID"),
+        db_cluster_id=db_cluster_id,
+        db_instance_id=db_instance_id,
         region=args.region,
     )
     store.close()
@@ -289,7 +304,15 @@ def main(argv=None):
     p.set_defaults(func=cmd_collect_puma)
 
     p = sub.add_parser("collect-cw", help="poll CloudWatch CPU/connections (requires boto3)")
-    p.add_argument("--db-instance-id", type=rds_instance_id_arg, required=True)
+    target = p.add_mutually_exclusive_group(required=True)
+    target.add_argument(
+        "--db-cluster-id", type=rds_cluster_id_arg,
+        help="Aurora cluster identifier; automatically follows its current writer",
+    )
+    target.add_argument(
+        "--db-instance-id", type=rds_instance_id_arg,
+        help="fixed RDS instance identifier (standalone/compatibility mode)",
+    )
     p.add_argument("--region", default=None)
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.add_argument("--interval", type=interval_arg, default=60.0)
@@ -333,7 +356,13 @@ def main(argv=None):
 
     p = sub.add_parser("doctor", help="check deployment and collector readiness")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
-    p.add_argument(
+    target = p.add_mutually_exclusive_group()
+    target.add_argument(
+        "--db-cluster-id",
+        type=rds_cluster_id_arg,
+        help="Aurora cluster identifier (default: WHYSLOW_DB_CLUSTER_ID)",
+    )
+    target.add_argument(
         "--db-instance-id",
         type=rds_instance_id_arg,
         help="RDS instance identifier (default: WHYSLOW_DB_INSTANCE_ID)",

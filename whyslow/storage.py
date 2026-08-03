@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS collector_coverage (
 """
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class SchemaVersionError(RuntimeError):
@@ -222,6 +222,8 @@ class Store:
                 "  WHERE membership.collector = coverage.collector"
                 ") GROUP BY coverage.collector"
             )
+        elif version == 5:
+            self._add_column("cloudwatch_metrics", "source_instance", "TEXT")
         else:
             raise SchemaVersionError(f"no migration registered for schema version {version}")
 
@@ -291,18 +293,20 @@ class Store:
         )
         self.conn.commit()
 
-    def write_cloudwatch_metric(self, metric, value, ts=None):
+    def write_cloudwatch_metric(self, metric, value, ts=None, source_instance=None):
         ts = ts or time.time()
         # CloudWatch queries overlap to tolerate publication lag, so the
         # same datapoint can be returned by consecutive polls. Replace any
         # prior copy instead of growing duplicates or counting it twice.
         self.conn.execute(
-            "DELETE FROM cloudwatch_metrics WHERE metric = ? AND ts = ?",
-            (metric, ts),
+            "DELETE FROM cloudwatch_metrics WHERE metric = ? AND ts = ? AND "
+            "((source_instance IS NULL AND ? IS NULL) OR source_instance = ?)",
+            (metric, ts, source_instance, source_instance),
         )
         self.conn.execute(
-            "INSERT INTO cloudwatch_metrics (ts, metric, value) VALUES (?,?,?)",
-            (ts, metric, value),
+            "INSERT INTO cloudwatch_metrics (ts, metric, value, source_instance) "
+            "VALUES (?,?,?,?)",
+            (ts, metric, value, source_instance),
         )
         self.conn.commit()
 
@@ -413,9 +417,17 @@ class Store:
 
     def cloudwatch_metrics_in(self, start_ts, end_ts):
         return self.conn.execute(
-            "SELECT ts, metric, value FROM cloudwatch_metrics WHERE ts BETWEEN ? AND ? ORDER BY ts",
+            "SELECT ts, metric, value, source_instance FROM cloudwatch_metrics "
+            "WHERE ts BETWEEN ? AND ? ORDER BY ts",
             (start_ts, end_ts),
         ).fetchall()
+
+    def latest_cloudwatch_source(self):
+        row = self.conn.execute(
+            "SELECT source_instance FROM cloudwatch_metrics "
+            "WHERE source_instance IS NOT NULL ORDER BY ts DESC, rowid DESC LIMIT 1"
+        ).fetchone()
+        return row[0] if row else None
 
     def events_in(self, start_ts, end_ts):
         return self.conn.execute(

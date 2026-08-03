@@ -77,6 +77,8 @@ prune_timer = (root / "deploy" / "whyslow-prune.timer").read_text()
 
 assert "--dsn" not in pg_unit, "systemd must not expose the DSN in process arguments"
 assert "--token" not in puma_unit, "systemd must not expose the Puma token in process arguments"
+assert "WHYSLOW_DB_CLUSTER_ID" in cw_unit
+assert "--db-cluster-id" in cw_unit
 assert "puma/%i.env" in puma_unit, "each Puma target needs its own central-host configuration"
 for unit in (pg_unit, puma_unit, cw_unit):
     assert "--db /var/lib/whyslow/store.sqlite3" in unit, (

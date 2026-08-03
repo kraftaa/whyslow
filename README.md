@@ -84,10 +84,11 @@ use):
 ```bash
 export WHYSLOW_PG_DSN="postgresql://user:pass@host/db"
 export WHYSLOW_PUMA_TOKEN="replace-me"
+export WHYSLOW_DB_CLUSTER_ID="my-aurora-cluster"
 
 whyslow collect-pg    --db /var/lib/whyslow/store.sqlite3
 whyslow collect-puma  --host-name web-3 --stats-url https://web-3.internal:9293/stats --db /var/lib/whyslow/store.sqlite3
-whyslow collect-cw    --db-instance-id my-aurora-writer-instance --db /var/lib/whyslow/store.sqlite3
+whyslow collect-cw    --db-cluster-id "$WHYSLOW_DB_CLUSTER_ID" --db /var/lib/whyslow/store.sqlite3
 ```
 
 `--dsn` and `--token` remain available for local testing, but environment
@@ -145,8 +146,11 @@ same minute. Puma, events, and CloudWatch evidence must overlap that spike;
 CloudWatch uses the actual 60-second measurement interval rather than the
 time the delayed datapoint happened to be collected.
 
-The CloudWatch collector also preserves each datapoint's real timestamp
-and deduplicates overlapping publication-lag queries. The temporal
+The CloudWatch collector also resolves the Aurora cluster's current writer
+before every poll, preserves that source instance with each datapoint, and
+deduplicates overlapping publication-lag queries. A failover therefore
+switches collection to the new writer without a restart, while historical
+evidence remains attributable to the instance that produced it. The temporal
 regression test includes both counterexamples: scattered activity never
 forms a candidate, and a distant high-CPU metric never corroborates a
 nearby spike.
@@ -482,9 +486,16 @@ whyslow doctor
 file permissions, free disk space, required collector health, and the
 configured Postgres, Puma, and CloudWatch dependencies. Live credentials
 come from `WHYSLOW_PG_DSN`, `WHYSLOW_PUMA_STATS_URL` /
-`WHYSLOW_PUMA_TOKEN`, and `WHYSLOW_DB_INSTANCE_ID`, so they stay out of
+`WHYSLOW_PUMA_TOKEN`, and `WHYSLOW_DB_CLUSTER_ID`, so they stay out of
 process arguments and diagnostic output. Use `whyslow doctor --json` for
 automation.
+
+Aurora mode requires IAM permissions for `rds:DescribeDBClusters` and
+`cloudwatch:GetMetricStatistics`. `whyslow doctor` resolves the current
+writer and fails its provenance check if the latest stored metrics still
+refer to a different instance. `--db-instance-id` remains available for
+standalone RDS, but deliberately warns that fixed-instance mode cannot follow
+Aurora failovers.
 
 CLI inputs fail closed: report windows are capped at 31 days, collector
 intervals must be finite and between 0 and 3600 seconds, Puma URLs cannot
@@ -606,7 +617,7 @@ run manually against a local Postgres to reproduce.
 - **Sanitized query structure is still operational data.** Literal values
   and comments are removed, but statement types and relation names remain
   visible by design. Treat the mode-`0600` SQLite store as sensitive.
-- **CloudWatch collector is real code, not live-tested** (requires
+- **CloudWatch collector is real code, but not tested against a live AWS account** (requires
   AWS credentials this environment doesn't have). Everything else in
   this README is demonstrated against a real running Postgres
   instance, not simulated.
@@ -672,7 +683,8 @@ Four gaps closed after an audit, not speculative additions:
   out of scope — it pulls this back toward generic monitoring, which
   is exactly the crowded, already-served space this tool exists to
   avoid.
-- CloudWatch collector is now tested against a mocked AWS account
-  (`moto`) but still not run against a **real** AWS account -- the
+- CloudWatch collection and Aurora writer failover are tested against a
+  mocked AWS account/client (`moto` plus an RDS API fake), but still not run
+  against a **real** AWS account -- the
   remaining gap is smaller (auth/IAM/region edge cases in practice),
   not the core query logic, which is now exercised end-to-end
