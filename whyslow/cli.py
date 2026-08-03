@@ -12,6 +12,7 @@ from .collector_puma import PumaCollector
 from . import explain as explain_mod
 from . import diff as diff_mod
 from . import status as status_mod
+from . import json_output
 from .validation import (
     MAX_EVENT_KIND_CHARS,
     MAX_EVENT_PAYLOAD_CHARS,
@@ -179,7 +180,10 @@ def cmd_explain(args):
     start_ts, end_ts = resolve_window(args)
     store = Store(args.db)
     result = explain_mod.explain(store, start_ts, end_ts)
-    print(explain_mod.render(result, start_ts, end_ts))
+    if args.json:
+        print(json_output.dumps(json_output.explain_document(result, start_ts, end_ts)))
+    else:
+        print(explain_mod.render(result, start_ts, end_ts))
 
 
 def cmd_event(args):
@@ -192,15 +196,14 @@ def cmd_event(args):
 def cmd_status(args):
     store = Store(args.db)
     result = status_mod.status(store)
-    print(status_mod.render(result))
+    healthy = status_mod.is_healthy(result)
+    if args.json:
+        print(json_output.dumps(json_output.status_document(result, healthy)))
+    else:
+        print(status_mod.render(result))
     # Non-zero exit if any collector is stale, so this is usable as a
     # monitoring check (cron, Nagios, whatever) rather than only by eye.
-    unhealthy = (
-        not result["collectors"]
-        or any(c["stale"] for c in result["collectors"])
-        or any(c.get("instance_role") == "replica" for c in result["collectors"])
-    )
-    if unhealthy:
+    if not healthy:
         sys.exit(1)
 
 
@@ -271,7 +274,16 @@ def cmd_diff(args):
     store = Store(args.db)
 
     result = diff_mod.diff(store, baseline_start, baseline_end, incident_start, incident_end)
-    print(diff_mod.render(result))
+    if args.json:
+        print(json_output.dumps(json_output.diff_document(
+            result,
+            baseline_start,
+            baseline_end,
+            incident_start,
+            incident_end,
+        )))
+    else:
+        print(diff_mod.render(result))
 
 
 def main(argv=None):
@@ -328,10 +340,12 @@ def main(argv=None):
     )
     p.add_argument("--to", help="window end (ISO-8601, HH:MM UTC, or epoch)")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
+    p.add_argument("--json", action="store_true", help="emit versioned machine-readable JSON")
     p.set_defaults(func=cmd_explain)
 
     p = sub.add_parser("status", help="is anything actually being collected right now?")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
+    p.add_argument("--json", action="store_true", help="emit versioned machine-readable JSON")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("prune", help="delete rows past their retention windows")
@@ -381,6 +395,7 @@ def main(argv=None):
     p.add_argument("--from", dest="from_")
     p.add_argument("--to")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
+    p.add_argument("--json", action="store_true", help="emit versioned machine-readable JSON")
     p.set_defaults(func=cmd_diff)
 
     p = sub.add_parser("event", help="record a deploy/job marker (one line in your CI/CD pipeline)")

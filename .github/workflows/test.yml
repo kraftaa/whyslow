@@ -34,9 +34,9 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -95,6 +95,9 @@ jobs:
 
       - name: End-to-end CLI test (status, --last windows, diff --baseline-last)
         run: python3 tests/cli_e2e_smoke.py
+
+      - name: Versioned JSON output contract test
+        run: python3 tests/json_output_smoke.py
 
       - name: Event correlation + signal-count regression test
         run: python3 tests/event_smoke.py

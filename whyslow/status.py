@@ -94,6 +94,14 @@ def status(store, now=None):
     }
 
 
+def is_healthy(result):
+    """The public status exit contract, shared by text and JSON output."""
+    return bool(result["collectors"]) and not any(
+        collector["stale"] or collector.get("instance_role") == "replica"
+        for collector in result["collectors"]
+    )
+
+
 def render(result):
     lines = []
     now = result["now"]

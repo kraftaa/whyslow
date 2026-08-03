@@ -490,6 +490,20 @@ come from `WHYSLOW_PG_DSN`, `WHYSLOW_PUMA_STATS_URL` /
 process arguments and diagnostic output. Use `whyslow doctor --json` for
 automation.
 
+`explain`, `diff`, and `status` also support a stable, versioned JSON contract:
+
+```bash
+whyslow --last 15m --json > incident.json
+whyslow diff --last 15m --baseline-last 15m --json
+whyslow status --json
+```
+
+The JSON form preserves exact windows, coverage gaps, contributors, named
+signals, blocking remediation fields, and CloudWatch source-instance
+provenance without requiring automation to parse terminal prose. Set-like
+values are sorted and explicit-window reports are deterministic. Compatibility
+rules and field descriptions are documented in [JSON_OUTPUT.md](JSON_OUTPUT.md).
+
 Aurora mode requires IAM permissions for `rds:DescribeDBClusters` and
 `cloudwatch:GetMetricStatistics`. `whyslow doctor` resolves the current
 writer and fails its provenance check if the latest stored metrics still
@@ -643,7 +657,7 @@ appeared and blocking edges going 0 -> 1.
 
 ## Reliability, retention, and Puma coverage
 
-Four gaps closed after an audit, not speculative additions:
+Operational gaps closed after repeated audits:
 
 - **Retention/pruning is implemented and tested** (`Store.prune()`,
   `whyslow prune`, and `tests/prune_smoke.py`) — session/Puma data ages
@@ -670,6 +684,13 @@ Four gaps closed after an audit, not speculative additions:
   synthetic case where summing and worst-worker aggregation disagree
   (sum: backlog=25, pool_capacity=27 -- both wrong; worst-worker:
   20 and 0 -- correct).
+- **Machine-readable output is a versioned interface, not a dump of internal
+  Python objects.** `tests/json_output_smoke.py` verifies the schema envelope,
+  deterministic ordering, exact windows, health verdict, default command
+  routing, and CloudWatch writer provenance.
+- **Dependency maintenance is automated.** Dependabot checks both Python and
+  GitHub Actions dependencies weekly, and CI actions use Node 24-compatible
+  releases.
 
 ## Not yet built
 

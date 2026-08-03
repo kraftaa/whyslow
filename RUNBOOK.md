@@ -111,6 +111,18 @@ whyslow --last 15m
 whyslow diff --last 15m --baseline-last 15m
 ```
 
+To attach the complete structured evidence to an incident ticket or feed an
+automation, capture the same commands as versioned JSON:
+
+```bash
+whyslow --last 15m --json > whyslow-incident.json
+whyslow diff --last 15m --baseline-last 15m --json > whyslow-diff.json
+```
+
+The JSON includes coverage uncertainty and CloudWatch writer provenance; do
+not discard those fields when presenting a shortened summary. See
+[JSON_OUTPUT.md](JSON_OUTPUT.md) for the compatibility contract.
+
 ---
 
 ## Reading the answer
