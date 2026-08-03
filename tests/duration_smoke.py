@@ -217,3 +217,64 @@ assert not b4["still_active"], "the later window includes the known resolution"
 assert 899 < b4["held_seconds"] < 901
 store3.close()
 print("PASS: overlapping locks remain visible with window-correct state and remediation")
+
+
+# --- Regression: if collection stops while an edge is active, NULL
+# ended_ts means "resolution unknown", not "still blocking forever".
+print("\n--- regression: unresolved edge followed by collector coverage gap ---")
+shutil.rmtree("/tmp/duration_smoke_abandoned", ignore_errors=True)
+store4 = Store("/tmp/duration_smoke_abandoned/store.sqlite3")
+base = (int(time.time() // 60) - 20) * 60
+store4.write_blocking_edges(
+    [(800, "web-8", 650, "batch", "analytics_role", "REINDEX TABLE orders")],
+    ts=base + 5,
+)
+store4.write_heartbeat("postgres", detail="ok", ts=base + 10)
+store4.write_heartbeat("postgres", detail="ok", ts=base + 70)
+
+abandoned = explain_mod.explain(store4, base, base + 600)
+abandoned_out = explain_mod.render(abandoned, base, base + 600)
+print(abandoned_out)
+abandoned_blockers = [
+    c for c in abandoned["contributors"] if c["category"] == "blocking"
+]
+assert abandoned_blockers, "the observed portion of an abandoned edge should remain evidence"
+abandoned_blocker = abandoned_blockers[0]
+assert abandoned_blocker["resolution_unknown"]
+assert not abandoned_blocker["still_active"]
+assert not abandoned_blocker["currently_unresolved"]
+assert 114 < abandoned_blocker["held_seconds"] < 116
+assert "resolution unknown after collector coverage stopped" in abandoned_out
+assert "before coverage stopped" in abandoned_out
+assert "pg_cancel_backend(650)" not in abandoned_out
+
+# A later window must not resurrect the stale edge as a live blocker.
+later = explain_mod.explain(store4, base + 300, base + 600)
+assert not [c for c in later["contributors"] if c["category"] == "blocking"]
+
+# Continuous rediscovery keeps the original start, while the same PID pair
+# observed after a real gap becomes a separate episode.
+store4.write_blocking_edges(
+    [(800, "web-8", 650, "batch", "analytics_role", "REINDEX TABLE orders")],
+    ts=base + 75,
+)
+assert len(store4.blocking_edges_in(0, base + 100)) == 1
+store4.write_blocking_edges(
+    [(800, "web-8", 650, "batch", "analytics_role", "REINDEX TABLE orders")],
+    ts=base + 305,
+)
+
+# A long reconnect gap clears the collector's in-memory edge identity so
+# its priming poll can record the still-present edge as a new episode.
+collector4 = PostgresCollector("unused", store4)
+collector4._last_blocking_keys = {(800, 650)}
+collector4._prepare_for_connection(now=base + 305)
+assert not collector4._last_blocking_keys
+
+store4.mark_blocking_edges_ended({(800, 650)}, ts=base + 360)
+episodes = store4.blocking_edges_in(0, base + 600)
+assert len(episodes) == 2, episodes
+assert episodes[0][7] is None, "the abandoned episode remains explicitly unknown"
+assert episodes[1][7] == base + 360, "the later episode resolves independently"
+store4.close()
+print("PASS: abandoned edges are bounded by coverage and cannot look live forever")

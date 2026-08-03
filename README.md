@@ -279,6 +279,13 @@ statement structure needed for diagnosis is retained.
   at the requested window end. A block known to have resolved later
   does not receive a dangerous live PID termination suggestion.
 
+- **A collector crash could make an unresolved block look active
+  forever.** An edge with no recorded end is now bounded at the first
+  complete Postgres coverage gap and labeled `resolution unknown`.
+  Later windows do not resurrect it as a live blocker, and reconnects
+  preserve continuous edges while separating post-gap PID reuse into a
+  new episode.
+
 ### Round: writing the runbook exposed three gaps
 
 Writing [RUNBOOK.md](RUNBOOK.md) — what to actually type at 2am — turned

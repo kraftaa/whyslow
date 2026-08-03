@@ -204,12 +204,28 @@ class Store:
 
     def write_blocking_edges(self, rows, ts=None):
         ts = ts or time.time()
-        self.conn.executemany(
-            "INSERT INTO blocking_edges "
-            "(ts, blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_usename, blocking_query) "
-            "VALUES (?,?,?,?,?,?,?)",
-            [(ts, *r) for r in rows],
-        )
+        for row in rows:
+            blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_user, blocking_query = row
+            existing = self.conn.execute(
+                "SELECT ts FROM blocking_edges "
+                "WHERE blocked_pid = ? AND blocking_pid = ? AND ended_ts IS NULL "
+                "ORDER BY ts DESC LIMIT 1",
+                (blocked_pid, blocking_pid),
+            ).fetchone()
+            # A reconnect primes active blocking edges again. Preserve the
+            # original start when coverage was continuous, but create a new
+            # episode after a real observation gap (the old edge's resolution
+            # is unknowable and must not swallow a later PID-reuse episode).
+            if existing and self.collector_coverage_gap_after(
+                "postgres", existing[0], ts
+            ) is None:
+                continue
+            self.conn.execute(
+                "INSERT INTO blocking_edges "
+                "(ts, blocked_pid, blocked_app, blocking_pid, blocking_app, "
+                "blocking_usename, blocking_query) VALUES (?,?,?,?,?,?,?)",
+                (ts, *row),
+            )
         self.conn.commit()
 
     def write_puma_stat(self, host, backlog, pool_capacity, max_threads, running, rss_mb, ts=None):
@@ -459,6 +475,32 @@ class Store:
                 for name, expected in expected_by_collector.items()
             },
         }
+
+    def collector_coverage_gap_after(self, collector, start_ts, end_ts):
+        """Start timestamp of the first complete uncovered minute.
+
+        Returns None when coverage is continuous, or when the starting
+        minute itself has no coverage (synthetic/imported evidence cannot be
+        bounded safely). The current partial minute is never called a gap.
+        """
+        start_bucket = int(start_ts // 60)
+        last_complete_bucket = int(end_ts // 60) - 1
+        if last_complete_bucket < start_bucket:
+            return None
+        buckets = {
+            row[0]
+            for row in self.conn.execute(
+                "SELECT minute_bucket FROM collector_coverage "
+                "WHERE collector = ? AND minute_bucket BETWEEN ? AND ?",
+                (collector, start_bucket, last_complete_bucket),
+            ).fetchall()
+        }
+        if start_bucket not in buckets:
+            return None
+        for bucket in range(start_bucket, last_complete_bucket + 1):
+            if bucket not in buckets:
+                return bucket * 60
+        return None
 
     def get_heartbeats(self):
         return self.conn.execute(

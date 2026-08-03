@@ -326,6 +326,31 @@ class PostgresCollector:
             return 0, len(edge_rows)
         return len(session_rows), len(edge_rows)
 
+    def _prepare_for_connection(self, now=None):
+        """Reset edge identity only after a real historical coverage gap.
+
+        Keeping `_last_blocking_keys` through a brief reconnect lets the
+        priming poll mark edges that disappeared while reconnecting. After a
+        complete uncovered minute, however, continuity is unknowable and an
+        edge still present must be recorded as a new episode.
+        """
+        now = now or time.time()
+        postgres_heartbeat = next(
+            (
+                heartbeat
+                for heartbeat in self.store.get_heartbeats()
+                if heartbeat[0] == "postgres"
+            ),
+            None,
+        )
+        if (
+            postgres_heartbeat
+            and self.store.collector_coverage_gap_after(
+                "postgres", postgres_heartbeat[1], now
+            ) is not None
+        ):
+            self._last_blocking_keys.clear()
+
     def run_forever(self, prune_every=3600):
         backoff = 1.0
         last_prune = time.time()
@@ -348,6 +373,7 @@ class PostgresCollector:
 
                 # Prime once so a (re)start doesn't report every already-active
                 # session as newly appeared.
+                self._prepare_for_connection()
                 self.poll_once(conn, prime_only=True)
 
                 while True:

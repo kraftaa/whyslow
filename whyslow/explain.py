@@ -88,10 +88,29 @@ def build_timeline(store, start_ts, end_ts):
 
     for row in store.blocking_edges_in(start_ts, end_ts):
         ts, blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_user, blocking_query, ended_ts = row
+        coverage_gap_ts = None
+        if ended_ts is None:
+            coverage_gap_ts = store.collector_coverage_gap_after(
+                "postgres", ts, end_ts
+            )
+            # The edge was last known before this window and observation was
+            # then lost. Coverage warnings carry the uncertainty; do not
+            # present the stale row as a live incident forever.
+            if coverage_gap_ts is not None and coverage_gap_ts < start_ts:
+                continue
         label = label_query(blocking_query)
         blocker_desc = f"{blocking_user} ({label})" if label else f"{blocking_user or blocking_pid}"
-        active_at_window_end = ended_ts is None or ended_ts > end_ts
-        if active_at_window_end:
+        resolution_unknown = coverage_gap_ts is not None
+        effective_ended_ts = ended_ts if ended_ts is not None else coverage_gap_ts
+        active_at_window_end = (
+            effective_ended_ts is None or effective_ended_ts > end_ts
+        )
+        if resolution_unknown:
+            dur = (
+                " [resolution unknown after collector coverage stopped; "
+                f"observed at least {coverage_gap_ts - ts:.0f}s]"
+            )
+        elif active_at_window_end:
             dur = f" [still active at window end; held at least {end_ts - ts:.0f}s]"
         else:
             dur = f" [held {ended_ts - ts:.0f}s]"
@@ -103,8 +122,10 @@ def build_timeline(store, start_ts, end_ts):
             {"kind": "blocking_edge", "blocked_pid": blocked_pid, "blocked_app": blocked_app,
              "blocking_pid": blocking_pid, "blocking_user": blocking_user,
              "blocking_query": blocking_query, "started_ts": ts,
-             "ended_ts": ended_ts, "active_at_window_end": active_at_window_end,
-             "currently_unresolved": ended_ts is None, "window_end_ts": end_ts},
+             "ended_ts": effective_ended_ts,
+             "active_at_window_end": active_at_window_end,
+             "currently_unresolved": ended_ts is None and not resolution_unknown,
+             "resolution_unknown": resolution_unknown, "window_end_ts": end_ts},
         ))
 
     for ts, host, backlog, pool_capacity, max_threads, running, rss_mb in store.puma_stats_in(start_ts, end_ts):
@@ -311,6 +332,10 @@ def explain(store, start_ts, end_ts):
                 m.get("currently_unresolved")
                 for _, m in data["edges"]
             )
+            resolution_unknown = any(
+                m.get("resolution_unknown")
+                for _, m in data["edges"]
+            )
 
             # Report state as of the requested window end. A historical
             # block may have resolved later, but it was still active at the
@@ -327,6 +352,7 @@ def explain(store, start_ts, end_ts):
                 "held_seconds": held_seconds,
                 "still_active": still_active,
                 "currently_unresolved": currently_unresolved,
+                "resolution_unknown": resolution_unknown,
                 "blocked_count": len({m.get("blocked_pid") for _, m in data["edges"]}),
                 "signals": signals,
                 "signals_possible": BLOCKING_SIGNAL_COUNT,
@@ -576,7 +602,9 @@ def render(result, start_ts, end_ts):
         if c.get("pid") is not None:
             extra += f"  pid={c['pid']}"
         if c.get("held_seconds") is not None:
-            if c.get("still_active") and c.get("currently_unresolved"):
+            if c.get("resolution_unknown"):
+                suffix = "+ before coverage stopped"
+            elif c.get("still_active") and c.get("currently_unresolved"):
                 suffix = "+ and counting"
             elif c.get("still_active"):
                 suffix = "+ at window end"
