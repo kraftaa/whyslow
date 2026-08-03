@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -11,6 +12,18 @@ from .collector_puma import PumaCollector
 from . import explain as explain_mod
 from . import diff as diff_mod
 from . import status as status_mod
+from .validation import (
+    MAX_EVENT_KIND_CHARS,
+    MAX_EVENT_PAYLOAD_CHARS,
+    MAX_EVENT_SOURCE_CHARS,
+    MAX_REPORT_WINDOW_SECONDS,
+    validate_host_name,
+    validate_http_url,
+    validate_identifier,
+    validate_interval,
+    validate_rds_instance_id,
+    validate_text,
+)
 
 
 DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -27,9 +40,28 @@ def parse_duration(s):
         value = float(s[:-1])
     except ValueError:
         raise SystemExit(f"could not parse duration: {s!r} (use e.g. 15m, 2h, 90s, 1d)")
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise SystemExit(f"duration must be greater than zero: {s!r}")
-    return value * DURATION_UNITS[unit]
+    seconds = value * DURATION_UNITS[unit]
+    if seconds > MAX_REPORT_WINDOW_SECONDS:
+        raise SystemExit("report window must not exceed 31 days")
+    return seconds
+
+
+def _arg_value(validator, label=None):
+    def parse(value):
+        try:
+            return validator(value) if label is None else validator(value, label)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+    return parse
+
+
+interval_arg = _arg_value(validate_interval)
+host_name_arg = _arg_value(validate_host_name)
+stats_url_arg = _arg_value(validate_http_url)
+collector_name_arg = _arg_value(validate_identifier, "collector name")
+rds_instance_id_arg = _arg_value(validate_rds_instance_id)
 
 
 def _is_clock_time(s):
@@ -51,6 +83,8 @@ def resolve_explicit_window(from_value, to_value):
         end_ts += 86400
     if end_ts <= start_ts:
         raise SystemExit("window end must be after window start")
+    if end_ts - start_ts > MAX_REPORT_WINDOW_SECONDS:
+        raise SystemExit("report window must not exceed 31 days")
     return start_ts, end_ts
 
 
@@ -74,8 +108,15 @@ def parse_time(s):
     the collector would resolve to a different epoch with no error at all,
     returning the wrong window during an incident."""
     try:
-        return float(s)
-    except ValueError:
+        epoch = float(s)
+        if not math.isfinite(epoch):
+            raise SystemExit(f"timestamp must be finite: {s!r}")
+        try:
+            datetime.fromtimestamp(epoch, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            raise SystemExit(f"timestamp is outside the supported date range: {s!r}")
+        return epoch
+    except (ValueError, OverflowError, OSError):
         pass
 
     # ISO-8601 is the unambiguous form for historical and cross-date
@@ -87,7 +128,7 @@ def parse_time(s):
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.timestamp()
-    except ValueError:
+    except (ValueError, OverflowError, OSError):
         pass
 
     today = datetime.now(timezone.utc).date()
@@ -127,15 +168,15 @@ def cmd_collect_cw(args):
 
 
 def cmd_explain(args):
-    store = Store(args.db)
     start_ts, end_ts = resolve_window(args)
+    store = Store(args.db)
     result = explain_mod.explain(store, start_ts, end_ts)
     print(explain_mod.render(result, start_ts, end_ts))
 
 
 def cmd_event(args):
-    store = Store(args.db)
     ts = parse_time(args.at) if args.at else time.time()
+    store = Store(args.db)
     store.write_event(args.source, args.kind, args.payload, ts=ts)
     print(f"[whyslow] recorded event: source={args.source} kind={args.kind} at {ts:.0f}")
 
@@ -164,11 +205,10 @@ def cmd_prune(args):
 
 
 def cmd_retire(args):
-    store = Store(args.db)
     ts = parse_time(args.at) if args.at else time.time()
     if ts > time.time():
-        store.close()
         raise SystemExit("collector retirement time cannot be in the future")
+    store = Store(args.db)
     if not store.retire_collector(args.collector, ts=ts):
         store.close()
         raise SystemExit(f"unknown collector: {args.collector}")
@@ -195,7 +235,6 @@ def cmd_doctor(args):
 
 
 def cmd_diff(args):
-    store = Store(args.db)
     incident_start, incident_end = resolve_window(args)
     if args.baseline_last:
         # Baseline = the same-length window immediately before the incident
@@ -213,6 +252,8 @@ def cmd_diff(args):
             args.baseline_from,
             args.baseline_to,
         )
+
+    store = Store(args.db)
 
     result = diff_mod.diff(store, baseline_start, baseline_end, incident_start, incident_end)
     print(diff_mod.render(result))
@@ -232,26 +273,26 @@ def main(argv=None):
         help="postgres connection string (default: WHYSLOW_PG_DSN)",
     )
     p.add_argument("--db", default=".whyslow/store.sqlite3")
-    p.add_argument("--interval", type=float, default=1.0)
+    p.add_argument("--interval", type=interval_arg, default=1.0)
     p.set_defaults(func=cmd_collect_pg)
 
     p = sub.add_parser("collect-puma", help="poll a Puma control-app /stats endpoint")
-    p.add_argument("--host-name", required=True)
-    p.add_argument("--stats-url", required=True)
+    p.add_argument("--host-name", type=host_name_arg, required=True)
+    p.add_argument("--stats-url", type=stats_url_arg, required=True)
     p.add_argument(
         "--token",
         default=os.environ.get("WHYSLOW_PUMA_TOKEN"),
         help="Puma bearer token (default: WHYSLOW_PUMA_TOKEN)",
     )
     p.add_argument("--db", default=".whyslow/store.sqlite3")
-    p.add_argument("--interval", type=float, default=1.0)
+    p.add_argument("--interval", type=interval_arg, default=1.0)
     p.set_defaults(func=cmd_collect_puma)
 
     p = sub.add_parser("collect-cw", help="poll CloudWatch CPU/connections (requires boto3)")
-    p.add_argument("--db-instance-id", required=True)
+    p.add_argument("--db-instance-id", type=rds_instance_id_arg, required=True)
     p.add_argument("--region", default=None)
     p.add_argument("--db", default=".whyslow/store.sqlite3")
-    p.add_argument("--interval", type=float, default=60.0)
+    p.add_argument("--interval", type=interval_arg, default=60.0)
     p.set_defaults(func=cmd_collect_cw)
 
     p = sub.add_parser("explain", help="reconstruct a timeline + evidence for a window")
@@ -278,7 +319,11 @@ def main(argv=None):
         "retire",
         help="retire a collector without deleting its historical evidence",
     )
-    p.add_argument("collector", help="collector name shown by status, e.g. puma:web-4")
+    p.add_argument(
+        "collector",
+        type=collector_name_arg,
+        help="collector name shown by status, e.g. puma:web-4",
+    )
     p.add_argument(
         "--at",
         help="retirement timestamp (ISO-8601, HH:MM UTC, or epoch); defaults to now",
@@ -290,6 +335,7 @@ def main(argv=None):
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.add_argument(
         "--db-instance-id",
+        type=rds_instance_id_arg,
         help="RDS instance identifier (default: WHYSLOW_DB_INSTANCE_ID)",
     )
     p.add_argument("--region", default=None)
@@ -309,9 +355,34 @@ def main(argv=None):
     p.set_defaults(func=cmd_diff)
 
     p = sub.add_parser("event", help="record a deploy/job marker (one line in your CI/CD pipeline)")
-    p.add_argument("--source", required=True, help="e.g. deploy, dbt, airflow, manual")
-    p.add_argument("--kind", help="e.g. 'v1.2.3 released', 'nightly_rollup started'")
-    p.add_argument("--payload", help="optional extra detail (sha, job id, ...)")
+    p.add_argument(
+        "--source",
+        type=_arg_value(lambda value: validate_identifier(
+            validate_text(
+                value,
+                "event source",
+                MAX_EVENT_SOURCE_CHARS,
+                required=True,
+            ),
+            "event source",
+        )),
+        required=True,
+        help="e.g. deploy, dbt, airflow, manual",
+    )
+    p.add_argument(
+        "--kind",
+        type=_arg_value(lambda value: validate_text(
+            value, "event kind", MAX_EVENT_KIND_CHARS, required=True
+        )),
+        help="e.g. 'v1.2.3 released', 'nightly_rollup started'",
+    )
+    p.add_argument(
+        "--payload",
+        type=_arg_value(lambda value: validate_text(
+            value, "event payload", MAX_EVENT_PAYLOAD_CHARS
+        )),
+        help="optional extra detail (sha, job id, ...)",
+    )
     p.add_argument("--at", help="timestamp (ISO-8601, HH:MM UTC, or epoch); defaults to now")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.set_defaults(func=cmd_event)

@@ -2,6 +2,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from .storage import Store
+from .validation import validate_interval, validate_rds_instance_id
 
 METRICS = ["CPUUtilization", "DatabaseConnections"]
 
@@ -20,6 +21,8 @@ class CloudWatchCollector:
     not yet run against a real AWS account."""
 
     def __init__(self, db_instance_id, store: Store, interval=60, region=None):
+        self.db_instance_id = validate_rds_instance_id(db_instance_id)
+        self.interval = validate_interval(interval)
         try:
             import boto3
         except ImportError as e:
@@ -28,9 +31,7 @@ class CloudWatchCollector:
             ) from e
         self.boto3 = boto3
         self.client = boto3.client("cloudwatch", region_name=region)
-        self.db_instance_id = db_instance_id
         self.store = store
-        self.interval = interval
 
     def poll_once(self):
         now = datetime.now(timezone.utc)

@@ -9,6 +9,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from . import status as status_mod
+from .validation import validate_http_url, validate_rds_instance_id
 
 
 MIN_FREE_BYTES = 100 * 1024 * 1024
@@ -181,6 +182,7 @@ def _check_puma(url, token):
     if not url:
         return _check("puma_endpoint", "warn", "not checked; set WHYSLOW_PUMA_STATS_URL")
     try:
+        url = validate_http_url(url)
         request = urllib.request.Request(url)
         if token:
             request.add_header("Authorization", f"Bearer {token}")
@@ -204,6 +206,7 @@ def _check_cloudwatch(db_instance_id, region):
     if not db_instance_id:
         return _check("cloudwatch_api", "warn", "not checked; set WHYSLOW_DB_INSTANCE_ID")
     try:
+        db_instance_id = validate_rds_instance_id(db_instance_id)
         import boto3
 
         client = boto3.client("cloudwatch", region_name=region)

@@ -486,6 +486,11 @@ come from `WHYSLOW_PG_DSN`, `WHYSLOW_PUMA_STATS_URL` /
 process arguments and diagnostic output. Use `whyslow doctor --json` for
 automation.
 
+CLI inputs fail closed: report windows are capped at 31 days, collector
+intervals must be finite and between 0 and 3600 seconds, Puma URLs cannot
+embed credentials or query-string tokens, identifiers are restricted to
+safe operational characters, and event fields have bounded sizes.
+
 ```
 Collectors
   ✓ postgres                 alive  last heartbeat 1s ago  (interval=1.0s)

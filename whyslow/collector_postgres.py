@@ -4,6 +4,7 @@ import re
 import psycopg2
 
 from .storage import Store
+from .validation import validate_interval
 
 # Query-text labels are purely cosmetic -- they make evidence readable
 # ("reindex on orders" instead of "pid 512"). Detection itself never
@@ -242,7 +243,7 @@ class PostgresCollector:
     def __init__(self, dsn, store: Store, interval=1.0):
         self.dsn = dsn
         self.store = store
-        self.interval = interval
+        self.interval = validate_interval(interval)
         self._last_session_keys = set()
         self._last_blocking_keys = set()
 

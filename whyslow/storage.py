@@ -3,6 +3,14 @@ import stat
 import time
 from pathlib import Path
 
+from .validation import (
+    MAX_EVENT_KIND_CHARS,
+    MAX_EVENT_PAYLOAD_CHARS,
+    MAX_EVENT_SOURCE_CHARS,
+    validate_identifier,
+    validate_text,
+)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS session_changes (
     ts REAL NOT NULL,
@@ -257,6 +265,26 @@ class Store:
         self.conn.commit()
 
     def write_event(self, source, kind, payload, ts=None):
+        source = validate_identifier(
+            validate_text(
+                source,
+                "event source",
+                MAX_EVENT_SOURCE_CHARS,
+                required=True,
+            ),
+            "event source",
+        )
+        kind = validate_text(
+            kind,
+            "event kind",
+            MAX_EVENT_KIND_CHARS,
+            required=kind is not None,
+        )
+        payload = validate_text(
+            payload,
+            "event payload",
+            MAX_EVENT_PAYLOAD_CHARS,
+        )
         ts = ts or time.time()
         self.conn.execute(
             "INSERT INTO events (ts, source, kind, payload) VALUES (?,?,?,?)",

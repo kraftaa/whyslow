@@ -3,6 +3,7 @@ import json
 import urllib.request
 
 from .storage import Store
+from .validation import validate_host_name, validate_http_url, validate_interval
 
 
 class PumaCollector:
@@ -11,10 +12,10 @@ class PumaCollector:
     beyond enabling the control app -- this is a plain HTTP client."""
 
     def __init__(self, host_name, stats_url, store: Store, interval=1.0, auth_token=None):
-        self.host_name = host_name
-        self.stats_url = stats_url
+        self.host_name = validate_host_name(host_name)
+        self.stats_url = validate_http_url(stats_url)
         self.store = store
-        self.interval = interval
+        self.interval = validate_interval(interval)
         self.auth_token = auth_token
 
     def poll_once(self):
