@@ -5,7 +5,7 @@ description = "Deterministic, evidence-first CLI that reconstructs why web serve
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = ["psycopg2-binary>=2.9"]
+dependencies = ["psycopg2-binary>=2.9.12"]
 
 [project.urls]
 Homepage = "https://github.com/kraftaa/whyslow"
