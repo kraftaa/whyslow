@@ -21,6 +21,10 @@ test = [
     "moto[cloudwatch]>=5.2.2",
     "twine>=6.0",
 ]
+security = [
+    "cyclonedx-bom==7.3.0",
+    "pip-audit==2.10.1",
+]
 
 [project.scripts]
 whyslow = "whyslow.cli:main"

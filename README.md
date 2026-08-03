@@ -67,7 +67,10 @@ production:
 
 Production installs use the tested wheel from a private GitHub release in a
 versioned environment under `/opt/whyslow`; see [INSTALL.md](INSTALL.md) for
-checksum verification, systemd setup, upgrades, and rollback.
+checksum verification, systemd setup, upgrades, and rollback. Every release
+dependency tree is vulnerability-audited before publication and ships with a
+checksummed CycloneDX JSON SBOM. Workflow actions are pinned to immutable
+commits.
 
 For development from a checkout:
 
