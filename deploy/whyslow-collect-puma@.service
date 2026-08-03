@@ -20,7 +20,7 @@ User=whyslow
 Group=whyslow
 
 EnvironmentFile=/etc/whyslow/puma/%i.env
-ExecStart=/usr/local/bin/whyslow collect-puma \
+ExecStart=/opt/whyslow/venv/bin/whyslow collect-puma \
     --host-name %i \
     --stats-url ${WHYSLOW_PUMA_STATS_URL} \
     --db /var/lib/whyslow/store.sqlite3 \

@@ -13,7 +13,7 @@ Group=whyslow
 # file, not in this unit and not in the process arguments (where it would
 # be visible in `ps` output to every user on the box).
 EnvironmentFile=/etc/whyslow/postgres.env
-ExecStart=/usr/local/bin/whyslow collect-pg \
+ExecStart=/opt/whyslow/venv/bin/whyslow collect-pg \
     --db /var/lib/whyslow/store.sqlite3 \
     --interval 1.0
 

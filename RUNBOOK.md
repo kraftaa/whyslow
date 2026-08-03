@@ -6,6 +6,9 @@ Nothing below works unless collectors were **already running** before
 things went wrong. This is the one limitation that can't be engineered
 away: `pg_stat_activity` is a live view with no history.
 
+Install releases and perform upgrades using [INSTALL.md](INSTALL.md); do not
+run production collectors from an editable source checkout.
+
 **Point the DSN at the cluster WRITER endpoint, not the reader.** The
 reader looks like the safer choice (read-only!) and is the wrong one —
 write-lock contention happens on the writer and is invisible from a

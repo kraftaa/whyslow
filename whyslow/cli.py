@@ -6,6 +6,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
+from . import __version__
 from .storage import SchemaVersionError, Store
 from .collector_postgres import PostgresCollector
 from .collector_puma import PumaCollector
@@ -291,6 +292,7 @@ def main(argv=None):
         prog="whyslow",
         description="Why is it slow? Deterministic, evidence-first incident reconstruction.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=False)
 
     p = sub.add_parser("collect-pg", help="poll pg_stat_activity + blocking chains")
@@ -437,7 +439,9 @@ def main(argv=None):
     # isn't a bare -h/--help, so `whyslow status` etc. still work.
     argv_list = list(sys.argv[1:] if argv is None else argv)
     known = set(sub.choices)
-    if argv_list and argv_list[0] not in known and argv_list[0] not in ("-h", "--help"):
+    if argv_list and argv_list[0] not in known and argv_list[0] not in (
+        "-h", "--help", "--version"
+    ):
         argv_list = ["explain"] + argv_list
     elif not argv_list:
         parser.print_help()

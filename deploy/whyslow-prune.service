@@ -6,7 +6,7 @@ Documentation=https://github.com/kraftaa/whyslow
 Type=oneshot
 User=whyslow
 Group=whyslow
-ExecStart=/usr/local/bin/whyslow prune --db /var/lib/whyslow/store.sqlite3
+ExecStart=/opt/whyslow/venv/bin/whyslow prune --db /var/lib/whyslow/store.sqlite3
 
 StateDirectory=whyslow
 StateDirectoryMode=0700

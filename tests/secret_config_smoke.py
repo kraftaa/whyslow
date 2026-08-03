@@ -85,6 +85,10 @@ for unit in (pg_unit, puma_unit, cw_unit):
         "all collectors must write to the same central SQLite store"
     )
 for unit in (pg_unit, puma_unit, cw_unit, prune_unit):
+    assert "/opt/whyslow/venv/bin/whyslow" in unit, (
+        "systemd must use the explicit production virtual environment"
+    )
+for unit in (pg_unit, puma_unit, cw_unit, prune_unit):
     assert "UMask=0077" in unit
     assert "StateDirectoryMode=0700" in unit
 assert "whyslow prune --db /var/lib/whyslow/store.sqlite3" in prune_unit

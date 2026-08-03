@@ -65,11 +65,17 @@ production:
   application_name: <%= "web-#{Socket.gethostname}" %>
 ```
 
+Production installs use the tested wheel from a private GitHub release in a
+versioned environment under `/opt/whyslow`; see [INSTALL.md](INSTALL.md) for
+checksum verification, systemd setup, upgrades, and rollback.
+
+For development from a checkout:
+
 ```bash
 # Python 3.10+
-pip install -e .
-# Include this extra on the collector host when CloudWatch is enabled:
-pip install -e ".[cloudwatch]"
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[test]"
+.venv/bin/whyslow --version
 ```
 
 Run every collector on one collector host and point every process at the
@@ -559,7 +565,8 @@ whyslow diff --last 15m --baseline-last 15m   # baseline = the 15m just before
 
 `deploy/` contains systemd units for Postgres and CloudWatch plus a
 templated Puma unit (`whyslow-collect-puma@web-3`). Run all of them on
-the same collector host. Each Puma instance reads its target URL and
+the same collector host. Every unit invokes the explicit production
+environment at `/opt/whyslow/venv/bin/whyslow`. Each Puma instance reads its target URL and
 token from `/etc/whyslow/puma/<host>.env`.
 
 Enable the independent retention timer as well:

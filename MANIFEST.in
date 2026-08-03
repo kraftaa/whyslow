@@ -1,0 +1,5 @@
+include INSTALL.md
+include JSON_OUTPUT.md
+include RUNBOOK.md
+recursive-include deploy *
+recursive-include tests *.py

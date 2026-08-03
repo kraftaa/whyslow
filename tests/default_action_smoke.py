@@ -5,6 +5,8 @@ import subprocess
 import sys
 import shutil
 
+from whyslow import __version__
+
 DB = "/tmp/whyslow_default/store.sqlite3"
 shutil.rmtree("/tmp/whyslow_default", ignore_errors=True)
 
@@ -37,5 +39,9 @@ assert r4.returncode == 0 and "recorded event" in r4.stdout
 r5 = run("--help")
 assert r5.returncode == 0
 assert "collect-pg" in r5.stdout and "usage: whyslow" in r5.stdout
+
+r6 = run("--version")
+assert r6.returncode == 0
+assert r6.stdout.strip() == f"whyslow {__version__}"
 
 print("PASS: `whyslow --last 15m` defaults to explain; subcommands and --help unaffected")
