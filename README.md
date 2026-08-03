@@ -491,6 +491,11 @@ intervals must be finite and between 0 and 3600 seconds, Puma URLs cannot
 embed credentials or query-string tokens, identifiers are restricted to
 safe operational characters, and event fields have bounded sizes.
 
+The SQLite format has an explicit version with numbered transactional
+migrations. Older and unversioned stores upgrade in place; a store from a
+newer unsupported whyslow release is refused before journal, schema, or
+permission mutation. `whyslow doctor` reports current and expected versions.
+
 ```
 Collectors
   ✓ postgres                 alive  last heartbeat 1s ago  (interval=1.0s)

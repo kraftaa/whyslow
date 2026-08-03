@@ -6,7 +6,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from .storage import Store
+from .storage import SchemaVersionError, Store
 from .collector_postgres import PostgresCollector
 from .collector_puma import PumaCollector
 from . import explain as explain_mod
@@ -400,7 +400,10 @@ def main(argv=None):
         return
 
     args = parser.parse_args(argv_list)
-    args.func(args)
+    try:
+        args.func(args)
+    except SchemaVersionError as exc:
+        parser.exit(2, f"whyslow: {exc}\n")
 
 
 if __name__ == "__main__":

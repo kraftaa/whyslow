@@ -39,6 +39,7 @@ assert healthy["ok"], healthy
 for name in (
     "sqlite_integrity",
     "sqlite_wal",
+    "schema_version",
     "schema",
     "store_permissions",
     "postgres_collector",

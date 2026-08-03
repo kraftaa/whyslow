@@ -9,6 +9,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from . import status as status_mod
+from .storage import SCHEMA_VERSION
 from .validation import validate_http_url, validate_rds_instance_id
 
 
@@ -22,6 +23,7 @@ REQUIRED_SCHEMA = {
     "collector_heartbeats": {"collector", "ts", "expected_interval", "instance_role"},
     "collector_coverage": {"collector", "minute_bucket"},
     "collector_memberships": {"collector", "started_minute", "retired_minute"},
+    "schema_metadata": {"key", "value"},
 }
 
 
@@ -47,6 +49,12 @@ def doctor(store, *, dsn=None, puma_url=None, puma_token=None,
 
 def _check_store(store):
     checks = []
+    version = store.schema_version()
+    checks.append(_check(
+        "schema_version",
+        "pass" if version == SCHEMA_VERSION else "fail",
+        f"current={version}; expected={SCHEMA_VERSION}",
+    ))
     quick_check = store.conn.execute("PRAGMA quick_check").fetchone()[0]
     checks.append(_check(
         "sqlite_integrity",

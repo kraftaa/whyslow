@@ -31,12 +31,7 @@ CREATE TABLE IF NOT EXISTS blocking_edges (
     blocking_pid INTEGER NOT NULL,
     blocking_app TEXT,
     blocking_usename TEXT,
-    blocking_query TEXT,
-    -- When the edge stopped being observed. NULL means either still
-    -- active, or the collector stopped before it resolved. Without this,
-    -- duration is uncomputable -- and "has this been blocking for 4
-    -- seconds or 4 minutes?" is the whole kill-it-or-wait decision.
-    ended_ts REAL
+    blocking_query TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_blocking_edges_ts ON blocking_edges(ts);
 
@@ -77,17 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE TABLE IF NOT EXISTS collector_heartbeats (
     collector TEXT PRIMARY KEY,
     ts REAL NOT NULL,
-    detail TEXT,
-    -- The collector's configured cadence. Status uses this rather than
-    -- assuming every Postgres/Puma collector runs at the default 1 second.
-    expected_interval REAL,
-    -- 'primary' | 'replica' | NULL. On Aurora, pointing the collector at
-    -- the cluster READER endpoint is the safer-looking choice (read-only,
-    -- no write risk) and is the wrong one: write-lock contention happens
-    -- on the writer and is invisible from a reader. Recorded per heartbeat
-    -- so `explain` can refuse to imply an all-clear from reader data,
-    -- rather than relying on someone having noticed a startup log line.
-    instance_role TEXT
+    detail TEXT
 );
 
 -- Historical coverage, one row per collector per minute. The heartbeat
@@ -102,17 +87,14 @@ CREATE TABLE IF NOT EXISTS collector_coverage (
     minute_bucket INTEGER NOT NULL,
     PRIMARY KEY (collector, minute_bucket)
 );
-
--- Fleet membership is separate from heartbeats: removing a host should
--- stop future stale/coverage warnings without erasing its historical
--- evidence. A later heartbeat automatically reactivates it.
-CREATE TABLE IF NOT EXISTS collector_memberships (
-    collector TEXT NOT NULL,
-    started_minute INTEGER NOT NULL,
-    retired_minute INTEGER,
-    PRIMARY KEY (collector, started_minute)
-);
 """
+
+
+SCHEMA_VERSION = 4
+
+
+class SchemaVersionError(RuntimeError):
+    pass
 
 
 RETENTION_SECONDS = {
@@ -132,21 +114,26 @@ class Store:
         if str(self.path) != ":memory:" and self.path.exists():
             self.original_mode = stat.S_IMODE(self.path.stat().st_mode)
         self.conn = sqlite3.connect(str(self.path), timeout=30)
-        if str(self.path) != ":memory:":
-            self.path.chmod(0o600)
         self.conn.execute("PRAGMA busy_timeout=30000;")
-        # WAL mode: readers and writers never block each other, unlike the
-        # default rollback-journal mode. Enabling WAL itself needs a write
-        # lock: simultaneous first opens exposed a startup race on Python
-        # 3.9 where one process failed immediately with "database is locked".
-        # Retry all initialization lock conflicts within the same 30-second
-        # budget used for ordinary SQLite writes.
-        self._retry_locked(
-            lambda: self.conn.execute("PRAGMA journal_mode=WAL;").fetchone()
-        )
-        self._retry_locked(lambda: self.conn.executescript(SCHEMA))
-        self._migrate()
-        self.conn.commit()
+        try:
+            declared = self._declared_schema_version()
+            if declared > SCHEMA_VERSION:
+                raise SchemaVersionError(
+                    f"store schema version {declared} is newer than supported "
+                    f"version {SCHEMA_VERSION}; upgrade whyslow"
+                )
+            if str(self.path) != ":memory:":
+                self.path.chmod(0o600)
+            # WAL mode: readers and writers never block each other. Check
+            # compatibility first so a newer store is refused without even
+            # changing its journal mode.
+            self._retry_locked(
+                lambda: self.conn.execute("PRAGMA journal_mode=WAL;").fetchone()
+            )
+            self._migrate()
+        except Exception:
+            self.conn.close()
+            raise
 
     def _retry_locked(self, operation):
         deadline = time.monotonic() + 30
@@ -158,49 +145,104 @@ class Store:
                     raise
                 time.sleep(0.05)
 
+    def _declared_schema_version(self):
+        table = self.conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'schema_metadata'"
+        ).fetchone()
+        if table is None:
+            return 0
+        try:
+            row = self.conn.execute(
+                "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
+            ).fetchone()
+            version = 0 if row is None else int(row[0])
+        except (sqlite3.DatabaseError, TypeError, ValueError) as exc:
+            raise SchemaVersionError("store has invalid schema version metadata") from exc
+        if version < 0:
+            raise SchemaVersionError("store has invalid schema version metadata")
+        return version
+
+    def schema_version(self):
+        return self._declared_schema_version()
+
     def _migrate(self):
-        """Add columns introduced after a database was first created.
-        `CREATE TABLE IF NOT EXISTS` silently does nothing on an existing
-        table, so without this an upgraded install would break on the
-        first query referencing a new column."""
-        expected = {
-            "blocking_edges": {"ended_ts": "REAL"},
-            "collector_heartbeats": {
-                "instance_role": "TEXT",
-                "expected_interval": "REAL",
-            },
+        """Run all pending numbered migrations in one SQLite transaction."""
+        self._retry_locked(lambda: self.conn.execute("BEGIN IMMEDIATE"))
+        current = None
+        try:
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_metadata "
+                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+            current = self._declared_schema_version()
+            if current > SCHEMA_VERSION:
+                raise SchemaVersionError(
+                    f"store schema version {current} is newer than supported "
+                    f"version {SCHEMA_VERSION}; upgrade whyslow"
+                )
+            for target in range(current + 1, SCHEMA_VERSION + 1):
+                self._run_migration(target)
+                self.conn.execute(
+                    "INSERT INTO schema_metadata (key, value) VALUES ('schema_version', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (str(target),),
+                )
+            self.conn.commit()
+        except Exception as exc:
+            self.conn.rollback()
+            if isinstance(exc, SchemaVersionError):
+                raise
+            raise SchemaVersionError(
+                f"failed migrating store schema from version {current} "
+                f"to {SCHEMA_VERSION}; schema was left unchanged"
+            ) from exc
+
+    def _run_migration(self, version):
+        if version == 1:
+            self._execute_schema_statements(SCHEMA)
+        elif version == 2:
+            self._add_column("blocking_edges", "ended_ts", "REAL")
+        elif version == 3:
+            self._add_column("collector_heartbeats", "expected_interval", "REAL")
+            self._add_column("collector_heartbeats", "instance_role", "TEXT")
+        elif version == 4:
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS collector_memberships ("
+                "collector TEXT NOT NULL, started_minute INTEGER NOT NULL, "
+                "retired_minute INTEGER, PRIMARY KEY (collector, started_minute))"
+            )
+            self.conn.execute(
+                "INSERT OR IGNORE INTO collector_memberships "
+                "(collector, started_minute, retired_minute) "
+                "SELECT coverage.collector, min(coverage.minute_bucket), NULL "
+                "FROM collector_coverage AS coverage "
+                "WHERE NOT EXISTS ("
+                "  SELECT 1 FROM collector_memberships AS membership "
+                "  WHERE membership.collector = coverage.collector"
+                ") GROUP BY coverage.collector"
+            )
+        else:
+            raise SchemaVersionError(f"no migration registered for schema version {version}")
+
+    def _execute_schema_statements(self, script):
+        statement = ""
+        for line in script.splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                self.conn.execute(statement)
+                statement = ""
+        if statement.strip():
+            raise SchemaVersionError("incomplete schema migration statement")
+
+    def _add_column(self, table, column, column_type):
+        existing = {
+            row[1] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
         }
-        for table, columns in expected.items():
-            existing = {
-                row[1] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
-            }
-            for column, coltype in columns.items():
-                if column not in existing:
-                    try:
-                        self._retry_locked(
-                            lambda: self.conn.execute(
-                                f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"
-                            )
-                        )
-                    except sqlite3.OperationalError as exc:
-                        # Another process may have completed the same
-                        # migration while this connection waited.
-                        if "duplicate column" not in str(exc).lower():
-                            raise
-        # Backfill one initial membership interval for stores created before
-        # explicit collector retirement existed.
-        self.conn.execute(
-            "INSERT OR IGNORE INTO collector_memberships "
-            "(collector, started_minute, retired_minute) "
-            "SELECT coverage.collector, min(coverage.minute_bucket), NULL "
-            "FROM collector_coverage AS coverage "
-            "WHERE NOT EXISTS ("
-            "  SELECT 1 FROM collector_memberships AS membership "
-            "  WHERE membership.collector = coverage.collector"
-            ") "
-            "GROUP BY coverage.collector"
-        )
-        self.conn.commit()
+        if column not in existing:
+            self.conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"
+            )
 
     # ---- writes (collectors call these) ----
 

@@ -1,8 +1,10 @@
 import shutil
 import sqlite3
+import subprocess
+import sys
 import time
 
-from whyslow.storage import Store
+from whyslow.storage import SCHEMA_VERSION, Store
 
 DB_PATH = "/tmp/migration_smoke/store.sqlite3"
 shutil.rmtree("/tmp/migration_smoke", ignore_errors=True)
@@ -59,6 +61,11 @@ heartbeat_cols_after = {
 }
 assert "expected_interval" in heartbeat_cols_after
 assert "instance_role" in heartbeat_cols_after
+assert store.schema_version() == SCHEMA_VERSION
+stored_version = store.conn.execute(
+    "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
+).fetchone()[0]
+assert stored_version == str(SCHEMA_VERSION)
 
 rows = store.blocking_edges_in(0, time.time() + 1)
 print(f"pre-existing rows preserved: {len(rows)}")
@@ -83,5 +90,65 @@ heartbeat_cols_again = {
 assert heartbeat_cols_again == heartbeat_cols_after
 store2.close()
 
+# A store written by a newer whyslow must be refused before WAL/schema/
+# permission mutation. Silently opening it could corrupt data whose layout
+# this version does not understand.
+newer_path = "/tmp/migration_smoke/newer.sqlite3"
+newer = sqlite3.connect(newer_path)
+newer.execute(
+    "CREATE TABLE schema_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+)
+newer.execute(
+    "INSERT INTO schema_metadata VALUES ('schema_version', ?)",
+    (str(SCHEMA_VERSION + 1),),
+)
+newer.commit()
+assert newer.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+newer.close()
+before = open(newer_path, "rb").read()
+
+refused = subprocess.run(
+    [sys.executable, "-m", "whyslow.cli", "status", "--db", newer_path],
+    text=True,
+    capture_output=True,
+)
+assert refused.returncode != 0
+assert "newer than supported" in refused.stderr
+assert "Traceback" not in refused.stderr
+after = open(newer_path, "rb").read()
+assert after == before, "refusing a newer store must not mutate its bytes"
+newer = sqlite3.connect(newer_path)
+assert newer.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+newer.close()
+
+# A malformed store that claims v1 but lacks the v1 tables must roll back
+# every pending step. In particular, it must not advance metadata to v2
+# before the missing table makes that migration fail.
+broken_path = "/tmp/migration_smoke/broken-v1.sqlite3"
+broken = sqlite3.connect(broken_path)
+broken.execute(
+    "CREATE TABLE schema_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+)
+broken.execute("INSERT INTO schema_metadata VALUES ('schema_version', '1')")
+broken.commit()
+broken.close()
+
+broken_result = subprocess.run(
+    [sys.executable, "-m", "whyslow.cli", "status", "--db", broken_path],
+    text=True,
+    capture_output=True,
+)
+assert broken_result.returncode != 0
+assert "schema was left unchanged" in broken_result.stderr
+assert "Traceback" not in broken_result.stderr
+broken = sqlite3.connect(broken_path)
+assert broken.execute(
+    "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
+).fetchone()[0] == "1"
+assert broken.execute(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='collector_memberships'"
+).fetchone() is None
+broken.close()
+
 print("\nPASS: an existing pre-ended_ts database migrates in place, keeps its data, "
-      "stays usable, and re-opening is idempotent")
+      "stays usable, migrations roll back, and newer stores are refused")
