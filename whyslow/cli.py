@@ -5,6 +5,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from . import __version__
 from .storage import SchemaVersionError, Store
@@ -66,6 +67,16 @@ stats_url_arg = _arg_value(validate_http_url)
 collector_name_arg = _arg_value(validate_identifier, "collector name")
 rds_instance_id_arg = _arg_value(validate_rds_instance_id)
 rds_cluster_id_arg = _arg_value(validate_rds_cluster_id)
+
+
+def backup_keep_arg(value):
+    try:
+        keep = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("backup retention must be an integer") from exc
+    if not 1 <= keep <= 3650:
+        raise argparse.ArgumentTypeError("backup retention must be between 1 and 3650")
+    return keep
 
 
 def _is_clock_time(s):
@@ -216,6 +227,29 @@ def cmd_prune(args):
     print(f"[whyslow] pruned old rows: {summary}")
 
 
+def cmd_backup(args):
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    output_dir.chmod(0o700)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    destination = output_dir / f"whyslow-{timestamp}.sqlite3"
+
+    store = Store(args.db)
+    try:
+        store.backup(destination)
+    finally:
+        store.close()
+
+    backups = sorted(output_dir.glob("whyslow-*.sqlite3"))
+    expired = backups[:-args.keep]
+    for old_backup in expired:
+        old_backup.unlink()
+    print(
+        f"[whyslow] backup ready: {destination} "
+        f"(retained={len(backups) - len(expired)}, removed={len(expired)})"
+    )
+
+
 def cmd_retire(args):
     ts = parse_time(args.at) if args.at else time.time()
     if ts > time.time():
@@ -353,6 +387,21 @@ def main(argv=None):
     p = sub.add_parser("prune", help="delete rows past their retention windows")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.set_defaults(func=cmd_prune)
+
+    p = sub.add_parser("backup", help="create a validated online SQLite backup")
+    p.add_argument("--db", default=".whyslow/store.sqlite3")
+    p.add_argument(
+        "--output-dir",
+        default=".whyslow/backups",
+        help="private backup directory (default: .whyslow/backups)",
+    )
+    p.add_argument(
+        "--keep",
+        type=backup_keep_arg,
+        default=7,
+        help="number of newest backups to retain (default: 7)",
+    )
+    p.set_defaults(func=cmd_backup)
 
     p = sub.add_parser(
         "retire",

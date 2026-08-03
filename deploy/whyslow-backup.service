@@ -1,0 +1,23 @@
+[Unit]
+Description=Create and validate a whyslow evidence backup
+Documentation=https://github.com/kraftaa/whyslow
+
+[Service]
+Type=oneshot
+User=whyslow
+Group=whyslow
+ExecStart=/opt/whyslow/venv/bin/whyslow backup \
+    --db /var/lib/whyslow/store.sqlite3 \
+    --output-dir /var/lib/whyslow/backups \
+    --keep 7
+
+StateDirectory=whyslow
+StateDirectoryMode=0700
+UMask=0077
+MemoryMax=512M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/whyslow

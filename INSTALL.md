@@ -9,10 +9,10 @@ Download the release assets from the private repository using an authenticated
 GitHub CLI, then verify their checksums:
 
 ```bash
-gh release download v0.1.1 --repo kraftaa/whyslow --dir /tmp/whyslow-v0.1.1
-cd /tmp/whyslow-v0.1.1
+gh release download v0.1.2 --repo kraftaa/whyslow --dir /tmp/whyslow-v0.1.2
+cd /tmp/whyslow-v0.1.2
 sha256sum --check SHA256SUMS
-tar -xzf whyslow-0.1.1.tar.gz
+tar -xzf whyslow-0.1.2.tar.gz
 ```
 
 Create a versioned environment and install the wheel with CloudWatch support:
@@ -22,18 +22,18 @@ sudo useradd --system --home-dir /var/lib/whyslow \
   --shell /usr/sbin/nologin whyslow
 sudo install -d -o whyslow -g whyslow -m 0700 /var/lib/whyslow
 sudo mkdir -p /opt/whyslow/releases
-sudo python3 -m venv /opt/whyslow/releases/0.1.1
-sudo /opt/whyslow/releases/0.1.1/bin/python -m pip install --upgrade pip
-sudo /opt/whyslow/releases/0.1.1/bin/python -m pip install \
-  'whyslow[cloudwatch] @ file:///tmp/whyslow-v0.1.1/whyslow-0.1.1-py3-none-any.whl'
-sudo ln -sfn /opt/whyslow/releases/0.1.1 /opt/whyslow/venv
+sudo python3 -m venv /opt/whyslow/releases/0.1.2
+sudo /opt/whyslow/releases/0.1.2/bin/python -m pip install --upgrade pip
+sudo /opt/whyslow/releases/0.1.2/bin/python -m pip install \
+  'whyslow[cloudwatch] @ file:///tmp/whyslow-v0.1.2/whyslow-0.1.2-py3-none-any.whl'
+sudo ln -sfn /opt/whyslow/releases/0.1.2 /opt/whyslow/venv
 /opt/whyslow/venv/bin/whyslow --version
 ```
 
-Install the units from the extracted `whyslow-0.1.1/deploy/` directory into
+Install the units from the extracted `whyslow-0.1.2/deploy/` directory into
 `/etc/systemd/system/`. They deliberately
 invoke `/opt/whyslow/venv/bin/whyslow`, so switching the `venv` symlink selects
-one complete, immutable installation for every collector and the prune timer.
+one complete, immutable installation for every collector and maintenance timer.
 Keep environment files under `/etc/whyslow/` root-owned and mode `0600` as
 described in [RUNBOOK.md](RUNBOOK.md).
 
@@ -46,6 +46,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now whyslow-collect-pg
 sudo systemctl enable --now whyslow-collect-cw
 sudo systemctl enable --now whyslow-prune.timer
+sudo systemctl enable --now whyslow-backup.timer
 ```
 
 Enable one `whyslow-collect-puma@HOST` instance for each Puma target.
@@ -56,9 +57,11 @@ Never replace packages inside the running environment. Build the new
 versioned environment first, verify it, and keep the previous one intact.
 
 ```bash
+sudo -u whyslow /opt/whyslow/venv/bin/whyslow backup \
+  --db /var/lib/whyslow/store.sqlite3 \
+  --output-dir /var/lib/whyslow/backups --keep 7
+# Record the exact validated backup path printed above for possible rollback.
 sudo systemctl stop 'whyslow-collect-puma@*' whyslow-collect-cw whyslow-collect-pg
-sudo sqlite3 /var/lib/whyslow/store.sqlite3 \
-  ".backup '/var/lib/whyslow/store.before-upgrade.sqlite3'"
 
 # Download, checksum, create /opt/whyslow/releases/NEW_VERSION, and install
 # the new wheel exactly as in the installation section. Then:
@@ -87,7 +90,8 @@ Run `whyslow doctor`. If it says the evidence schema is newer than the old
 binary supports, restore the pre-upgrade database before restarting:
 
 ```bash
-sudo cp /var/lib/whyslow/store.before-upgrade.sqlite3 \
+# Use the exact pre-upgrade path printed by `whyslow backup`.
+sudo cp /var/lib/whyslow/backups/whyslow-TIMESTAMP.sqlite3 \
   /var/lib/whyslow/store.sqlite3
 sudo chown whyslow:whyslow /var/lib/whyslow/store.sqlite3
 sudo chmod 0600 /var/lib/whyslow/store.sqlite3
@@ -102,7 +106,7 @@ downgrade.
 ## Creating a release
 
 Update the single version in `whyslow/__init__.py`, merge with green CI, then
-push a matching tag such as `v0.1.1`. The release workflow rejects a tag that
+push a matching tag such as `v0.1.2`. The release workflow rejects a tag that
 does not exactly match the package version. It builds and checks the wheel and
 source distribution, runs the isolated wheel smoke test, audits the installed
 runtime dependency tree for known vulnerabilities, and creates a versioned

@@ -1,0 +1,11 @@
+[Unit]
+Description=Create a daily validated whyslow evidence backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=30m
+Unit=whyslow-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -74,6 +74,8 @@ puma_unit = (root / "deploy" / "whyslow-collect-puma@.service").read_text()
 cw_unit = (root / "deploy" / "whyslow-collect-cw.service").read_text()
 prune_unit = (root / "deploy" / "whyslow-prune.service").read_text()
 prune_timer = (root / "deploy" / "whyslow-prune.timer").read_text()
+backup_unit = (root / "deploy" / "whyslow-backup.service").read_text()
+backup_timer = (root / "deploy" / "whyslow-backup.timer").read_text()
 
 assert "--dsn" not in pg_unit, "systemd must not expose the DSN in process arguments"
 assert "--token" not in puma_unit, "systemd must not expose the Puma token in process arguments"
@@ -84,14 +86,17 @@ for unit in (pg_unit, puma_unit, cw_unit):
     assert "--db /var/lib/whyslow/store.sqlite3" in unit, (
         "all collectors must write to the same central SQLite store"
     )
-for unit in (pg_unit, puma_unit, cw_unit, prune_unit):
+for unit in (pg_unit, puma_unit, cw_unit, prune_unit, backup_unit):
     assert "/opt/whyslow/venv/bin/whyslow" in unit, (
         "systemd must use the explicit production virtual environment"
     )
-for unit in (pg_unit, puma_unit, cw_unit, prune_unit):
+for unit in (pg_unit, puma_unit, cw_unit, prune_unit, backup_unit):
     assert "UMask=0077" in unit
     assert "StateDirectoryMode=0700" in unit
 assert "whyslow prune --db /var/lib/whyslow/store.sqlite3" in prune_unit
 assert "OnCalendar=hourly" in prune_timer
+assert "whyslow backup" in backup_unit
+assert "--output-dir /var/lib/whyslow/backups" in backup_unit
+assert "OnCalendar=*-*-* 03:15:00" in backup_timer
 
 print("PASS: collector secrets come from the environment and stay out of systemd process arguments")

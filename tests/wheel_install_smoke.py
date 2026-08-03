@@ -39,6 +39,8 @@ with tarfile.open(sdist, "r:gz") as archive:
         f"{root}/deploy/whyslow-collect-cw.service",
         f"{root}/deploy/whyslow-prune.service",
         f"{root}/deploy/whyslow-prune.timer",
+        f"{root}/deploy/whyslow-backup.service",
+        f"{root}/deploy/whyslow-backup.timer",
     }
     missing = required_source_files - set(names)
     assert not missing, f"source distribution omitted: {sorted(missing)}"

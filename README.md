@@ -572,14 +572,17 @@ the same collector host. Every unit invokes the explicit production
 environment at `/opt/whyslow/venv/bin/whyslow`. Each Puma instance reads its target URL and
 token from `/etc/whyslow/puma/<host>.env`.
 
-Enable the independent retention timer as well:
+Enable the independent retention and validated backup timers as well:
 
 ```bash
 systemctl enable --now whyslow-prune.timer
+systemctl enable --now whyslow-backup.timer
 ```
 
 This runs `whyslow prune` hourly, so expired data is removed even if the
-Postgres collector is unavailable. The collector units use
+Postgres collector is unavailable. The backup timer creates a private,
+integrity-checked online snapshot daily and retains the seven newest copies;
+collectors do not need to stop. The collector units use
 `Restart=always` with `StartLimitIntervalSec=0` — a collector that gives
 up retrying is a collector that silently isn't there when it matters —
 and read credentials from an `EnvironmentFile` rather than command-line

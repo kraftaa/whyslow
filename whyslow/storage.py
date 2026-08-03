@@ -1,5 +1,7 @@
+import os
 import sqlite3
 import stat
+import tempfile
 import time
 from pathlib import Path
 
@@ -633,6 +635,68 @@ class Store:
         deleted["collector_coverage"] = cur.rowcount
         self.conn.commit()
         return deleted
+
+    def backup(self, destination):
+        """Create and validate an atomic online backup of this store.
+
+        SQLite's backup API copies a consistent snapshot while collectors may
+        continue writing. The final path does not become visible until the
+        snapshot passes integrity and schema checks and has been flushed.
+        """
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            raise FileExistsError(f"backup destination already exists: {destination}")
+        if str(self.path) != ":memory:" and (
+            destination.resolve() == self.path.resolve()
+        ):
+            raise ValueError("backup destination must differ from the evidence store")
+
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".partial",
+            dir=destination.parent,
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        temporary.chmod(0o600)
+        backup_conn = None
+        try:
+            backup_conn = sqlite3.connect(str(temporary), timeout=30)
+            self.conn.backup(backup_conn)
+            integrity = backup_conn.execute("PRAGMA integrity_check").fetchall()
+            if integrity != [("ok",)]:
+                raise sqlite3.DatabaseError(
+                    f"backup integrity check failed: {integrity[:3]}"
+                )
+            row = backup_conn.execute(
+                "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
+            ).fetchone()
+            backup_version = None if row is None else int(row[0])
+            source_version = self.schema_version()
+            if backup_version != source_version:
+                raise SchemaVersionError(
+                    f"backup schema version {backup_version} does not match "
+                    f"source version {source_version}"
+                )
+            backup_conn.close()
+            backup_conn = None
+
+            with temporary.open("rb") as backup_file:
+                os.fsync(backup_file.fileno())
+            os.replace(temporary, destination)
+            destination.chmod(0o600)
+            directory_fd = os.open(destination.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            return destination
+        finally:
+            if backup_conn is not None:
+                backup_conn.close()
+            if temporary.exists():
+                temporary.unlink()
 
     def close(self):
         self.conn.close()

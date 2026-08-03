@@ -71,6 +71,8 @@ invalid_commands = [
     ("event", "--source", "deploy", "--at", "nan", "--db", DB),
     ("retire", "bad collector name", "--db", DB),
     ("doctor", "--db-instance-id", "1starts-with-number", "--db", DB),
+    ("backup", "--keep", "0", "--db", DB),
+    ("backup", "--keep", "3651", "--db", DB),
 ]
 
 for command in invalid_commands:

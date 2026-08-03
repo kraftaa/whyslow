@@ -84,6 +84,9 @@ jobs:
       - name: Concurrent read/write smoke test (explain running while a collector writes)
         run: python3 tests/read_write_concurrency_smoke.py
 
+      - name: Online backup and restore-integrity smoke test
+        run: python3 tests/backup_smoke.py
+
       - name: Burst-write concurrency smoke test (severe-incident-scale writes + concurrent reads)
         run: python3 tests/burst_concurrency_smoke.py
 

@@ -50,11 +50,27 @@ RDS or compatibility use and does not follow Aurora failovers.
 Do not run these against separate local stores on each web server: the
 tool cannot correlate timelines split across files. Use the systemd units
 in `deploy/` on the collector host so they survive reboots. Enable the
-retention timer too:
+retention and backup timers too:
 
 ```bash
 systemctl enable --now whyslow-prune.timer
+systemctl enable --now whyslow-backup.timer
 ```
+
+The backup timer creates a consistent online SQLite snapshot every day under
+`/var/lib/whyslow/backups`, validates its integrity and schema before making it
+visible, and retains the seven newest snapshots. Collectors continue writing
+during the copy. Run an additional backup before upgrades or risky host work:
+
+```bash
+whyslow backup --db /var/lib/whyslow/store.sqlite3 \
+  --output-dir /var/lib/whyslow/backups --keep 7
+systemctl list-timers whyslow-prune.timer whyslow-backup.timer
+```
+
+Periodically copy at least one validated snapshot off the collector host; the
+local timer protects against database corruption and bad upgrades, not loss of
+the entire host or volume.
 
 Then verify it's actually working, and check again occasionally:
 
