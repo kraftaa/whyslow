@@ -62,9 +62,9 @@ for _ in range(20):
     collector.poll_once(conn)
     times.append((time.perf_counter() - t0) * 1000)
 
-print(f"\npoll_once() full cost over 20 polls (SQL + Python diff logic):")
+print("\npoll_once() full cost over 20 polls (SQL + Python diff logic):")
 print(f"  min={min(times):.2f}ms  avg={sum(times)/len(times):.2f}ms  max={max(times):.2f}ms")
-print(f"  budget available per poll at interval=1.0s: 1000ms")
+print("  budget available per poll at interval=1.0s: 1000ms")
 
 stop.set()
 for c in conns:

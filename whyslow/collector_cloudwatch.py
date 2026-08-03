@@ -42,16 +42,20 @@ class CloudWatchCollector:
     against a mocked CloudWatch (moto) in tests/cloudwatch_smoke.py --
     not yet run against a real AWS account."""
 
-    def __init__(self, db_instance_id, store: Store, interval=60, region=None,
-                 db_cluster_id=None, cloudwatch_client=None, rds_client=None):
+    def __init__(
+        self,
+        db_instance_id,
+        store: Store,
+        interval=60,
+        region=None,
+        db_cluster_id=None,
+        cloudwatch_client=None,
+        rds_client=None,
+    ):
         if bool(db_instance_id) == bool(db_cluster_id):
             raise ValueError("specify exactly one of db_instance_id or db_cluster_id")
-        self.db_instance_id = (
-            validate_rds_instance_id(db_instance_id) if db_instance_id else None
-        )
-        self.db_cluster_id = (
-            validate_rds_cluster_id(db_cluster_id) if db_cluster_id else None
-        )
+        self.db_instance_id = validate_rds_instance_id(db_instance_id) if db_instance_id else None
+        self.db_cluster_id = validate_rds_cluster_id(db_cluster_id) if db_cluster_id else None
         self.interval = validate_interval(interval)
         try:
             import boto3
@@ -69,9 +73,7 @@ class CloudWatchCollector:
 
     def resolve_instance(self):
         if self.db_cluster_id:
-            self.current_instance = resolve_cluster_writer(
-                self.rds_client, self.db_cluster_id
-            )
+            self.current_instance = resolve_cluster_writer(self.rds_client, self.db_cluster_id)
         return self.current_instance
 
     def poll_once(self):
@@ -119,7 +121,8 @@ class CloudWatchCollector:
                     "cloudwatch",
                     detail=(
                         f"writer={self.current_instance} metrics={sorted(results.keys())}"
-                        if results else f"writer={self.current_instance} no datapoints"
+                        if results
+                        else f"writer={self.current_instance} no datapoints"
                     ),
                     expected_interval=self.interval,
                 )
@@ -133,6 +136,5 @@ class CloudWatchCollector:
                 # collector -- they previously did.
                 consecutive_failures += 1
                 if consecutive_failures <= 3 or consecutive_failures % 10 == 0:
-                    print(f"[whyslow] cloudwatch poll failed "
-                          f"({consecutive_failures}x): {e}")
+                    print(f"[whyslow] cloudwatch poll failed ({consecutive_failures}x): {e}")
                 time.sleep(min(self.interval * consecutive_failures, 300))

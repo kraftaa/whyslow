@@ -21,9 +21,7 @@ def validate_interval(value):
     if not math.isfinite(value) or value <= 0:
         raise ValueError("interval must be a finite number greater than zero")
     if value > MAX_COLLECTOR_INTERVAL_SECONDS:
-        raise ValueError(
-            f"interval must not exceed {MAX_COLLECTOR_INTERVAL_SECONDS} seconds"
-        )
+        raise ValueError(f"interval must not exceed {MAX_COLLECTOR_INTERVAL_SECONDS} seconds")
     return value
 
 
@@ -44,11 +42,7 @@ def validate_host_name(value):
 
 
 def _validate_rds_identifier(value, label):
-    if (
-        not _RDS_IDENTIFIER.fullmatch(value)
-        or value.endswith("-")
-        or "--" in value
-    ):
+    if not _RDS_IDENTIFIER.fullmatch(value) or value.endswith("-") or "--" in value:
         raise ValueError(
             f"{label} must start with a letter, end with a letter or digit, "
             "contain only letters, digits, and single hyphens, and be at most 63 characters"

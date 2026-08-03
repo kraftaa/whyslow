@@ -36,17 +36,26 @@ def _check(name, state, detail):
     return {"name": name, "state": state, "detail": detail}
 
 
-def doctor(store, *, dsn=None, puma_url=None, puma_token=None,
-           db_cluster_id=None, db_instance_id=None, region=None, now=None):
+def doctor(
+    store,
+    *,
+    dsn=None,
+    puma_url=None,
+    puma_token=None,
+    db_cluster_id=None,
+    db_instance_id=None,
+    region=None,
+    now=None,
+):
     now = now or time.time()
     checks = []
     checks.extend(_check_store(store))
     checks.extend(_check_collectors(store, now))
     checks.append(_check_postgres(dsn))
     checks.append(_check_puma(puma_url, puma_token))
-    checks.extend(_check_cloudwatch(
-        db_instance_id, region, db_cluster_id=db_cluster_id, store=store
-    ))
+    checks.extend(
+        _check_cloudwatch(db_instance_id, region, db_cluster_id=db_cluster_id, store=store)
+    )
     return {
         "ok": not any(check["state"] == "fail" for check in checks),
         "checks": checks,
@@ -57,39 +66,44 @@ def doctor(store, *, dsn=None, puma_url=None, puma_token=None,
 def _check_store(store):
     checks = []
     version = store.schema_version()
-    checks.append(_check(
-        "schema_version",
-        "pass" if version == SCHEMA_VERSION else "fail",
-        f"current={version}; expected={SCHEMA_VERSION}",
-    ))
+    checks.append(
+        _check(
+            "schema_version",
+            "pass" if version == SCHEMA_VERSION else "fail",
+            f"current={version}; expected={SCHEMA_VERSION}",
+        )
+    )
     quick_check = store.conn.execute("PRAGMA quick_check").fetchone()[0]
-    checks.append(_check(
-        "sqlite_integrity",
-        "pass" if quick_check == "ok" else "fail",
-        "quick_check=ok" if quick_check == "ok" else f"quick_check={quick_check}",
-    ))
+    checks.append(
+        _check(
+            "sqlite_integrity",
+            "pass" if quick_check == "ok" else "fail",
+            "quick_check=ok" if quick_check == "ok" else f"quick_check={quick_check}",
+        )
+    )
 
     journal_mode = store.conn.execute("PRAGMA journal_mode").fetchone()[0].lower()
-    checks.append(_check(
-        "sqlite_wal",
-        "pass" if journal_mode == "wal" else "fail",
-        f"journal_mode={journal_mode}",
-    ))
+    checks.append(
+        _check(
+            "sqlite_wal",
+            "pass" if journal_mode == "wal" else "fail",
+            f"journal_mode={journal_mode}",
+        )
+    )
 
     missing = []
     for table, required_columns in REQUIRED_SCHEMA.items():
-        columns = {
-            row[1]
-            for row in store.conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        columns = {row[1] for row in store.conn.execute(f"PRAGMA table_info({table})").fetchall()}
         absent = sorted(required_columns - columns)
         if absent:
             missing.append(f"{table}({', '.join(absent)})")
-    checks.append(_check(
-        "schema",
-        "fail" if missing else "pass",
-        f"missing: {'; '.join(missing)}" if missing else "required tables and columns present",
-    ))
+    checks.append(
+        _check(
+            "schema",
+            "fail" if missing else "pass",
+            f"missing: {'; '.join(missing)}" if missing else "required tables and columns present",
+        )
+    )
 
     if str(store.path) == ":memory:":
         checks.append(_check("store_permissions", "warn", "in-memory database"))
@@ -101,22 +115,24 @@ def _check_store(store):
         permissions_ok = mode == 0o600 and not unsafe_original
         detail = f"mode={oct(mode)}; expected 0o600"
         if unsafe_original:
-            detail = (
-                f"mode was {oct(original_mode)} before open; corrected to {oct(mode)}"
+            detail = f"mode was {oct(original_mode)} before open; corrected to {oct(mode)}"
+        checks.append(
+            _check(
+                "store_permissions",
+                "pass" if permissions_ok else "fail",
+                detail,
             )
-        checks.append(_check(
-            "store_permissions",
-            "pass" if permissions_ok else "fail",
-            detail,
-        ))
+        )
         disk_path = store.path.parent
 
     free = shutil.disk_usage(disk_path).free
-    checks.append(_check(
-        "disk_space",
-        "pass" if free >= MIN_FREE_BYTES else "fail",
-        f"{free / (1024 * 1024):.0f} MiB free; minimum {MIN_FREE_BYTES // (1024 * 1024)} MiB",
-    ))
+    checks.append(
+        _check(
+            "disk_space",
+            "pass" if free >= MIN_FREE_BYTES else "fail",
+            f"{free / (1024 * 1024):.0f} MiB free; minimum {MIN_FREE_BYTES // (1024 * 1024)} MiB",
+        )
+    )
     return checks
 
 
@@ -128,17 +144,23 @@ def _check_collectors(store, now):
     if postgres is None:
         checks.append(_check("postgres_collector", "fail", "not active"))
     elif postgres["stale"]:
-        checks.append(_check(
-            "postgres_collector", "fail",
-            f"stale; last heartbeat {postgres['age_seconds']:.0f}s ago",
-        ))
+        checks.append(
+            _check(
+                "postgres_collector",
+                "fail",
+                f"stale; last heartbeat {postgres['age_seconds']:.0f}s ago",
+            )
+        )
     elif postgres.get("instance_role") == "replica":
         checks.append(_check("postgres_collector", "fail", "connected to a replica"))
     else:
-        checks.append(_check(
-            "postgres_collector", "pass",
-            f"alive; last heartbeat {postgres['age_seconds']:.0f}s ago",
-        ))
+        checks.append(
+            _check(
+                "postgres_collector",
+                "pass",
+                f"alive; last heartbeat {postgres['age_seconds']:.0f}s ago",
+            )
+        )
 
     for role, matcher in (
         ("puma_collectors", lambda name: name.startswith("puma:")),
@@ -177,16 +199,19 @@ def _check_postgres(dsn):
             conn.close()
         if in_recovery:
             return _check(
-                "postgres_connection", "fail",
+                "postgres_connection",
+                "fail",
                 f"database={database}; connected to a replica/reader",
             )
         if not has_stats_visibility:
             return _check(
-                "postgres_connection", "fail",
+                "postgres_connection",
+                "fail",
                 f"database={database}; writer reachable but pg_read_all_stats is missing",
             )
         return _check(
-            "postgres_connection", "pass",
+            "postgres_connection",
+            "pass",
             f"database={database}; writer reachable with stats visibility",
         )
     except Exception as exc:
@@ -203,12 +228,9 @@ def _check_puma(url, token):
             request.add_header("Authorization", f"Bearer {token}")
         with urllib.request.urlopen(request, timeout=5) as response:
             payload = json.loads(response.read().decode())
-        valid = (
-            isinstance(payload, dict)
-            and (
-                "worker_status" in payload
-                or {"running", "max_threads", "pool_capacity", "backlog"} <= set(payload)
-            )
+        valid = isinstance(payload, dict) and (
+            "worker_status" in payload
+            or {"running", "max_threads", "pool_capacity", "backlog"} <= set(payload)
         )
         if not valid:
             return _check("puma_endpoint", "fail", "unexpected /stats response shape")
@@ -217,18 +239,31 @@ def _check_puma(url, token):
         return _check("puma_endpoint", "fail", _safe_error(exc))
 
 
-def _check_cloudwatch(db_instance_id, region, *, db_cluster_id=None, store=None,
-                      cloudwatch_client=None, rds_client=None):
+def _check_cloudwatch(
+    db_instance_id,
+    region,
+    *,
+    db_cluster_id=None,
+    store=None,
+    cloudwatch_client=None,
+    rds_client=None,
+):
     if not db_instance_id and not db_cluster_id:
-        return [_check(
-            "cloudwatch_api", "warn",
-            "not checked; set WHYSLOW_DB_CLUSTER_ID (Aurora) or WHYSLOW_DB_INSTANCE_ID",
-        )]
+        return [
+            _check(
+                "cloudwatch_api",
+                "warn",
+                "not checked; set WHYSLOW_DB_CLUSTER_ID (Aurora) or WHYSLOW_DB_INSTANCE_ID",
+            )
+        ]
     if db_instance_id and db_cluster_id:
-        return [_check(
-            "cloudwatch_api", "fail",
-            "configure only one of WHYSLOW_DB_CLUSTER_ID or WHYSLOW_DB_INSTANCE_ID",
-        )]
+        return [
+            _check(
+                "cloudwatch_api",
+                "fail",
+                "configure only one of WHYSLOW_DB_CLUSTER_ID or WHYSLOW_DB_INSTANCE_ID",
+            )
+        ]
     try:
         import boto3
 
@@ -250,34 +285,49 @@ def _check_cloudwatch(db_instance_id, region, *, db_cluster_id=None, store=None,
             Statistics=["Average"],
         )
         count = len(response.get("Datapoints", []))
-        checks = [_check(
-            "cloudwatch_api",
-            "pass" if count else "fail",
-            f"API reachable; writer={db_instance_id}; {count} CPU datapoint(s)" if count
-            else "API reachable but no recent CPU datapoints; verify the DB instance identifier",
-        )]
+        checks = [
+            _check(
+                "cloudwatch_api",
+                "pass" if count else "fail",
+                f"API reachable; writer={db_instance_id}; {count} CPU datapoint(s)"
+                if count
+                else "API reachable but no recent CPU datapoints; verify the DB instance identifier",
+            )
+        ]
         if db_cluster_id and store is not None:
             recorded = store.latest_cloudwatch_source()
             if recorded is None:
-                checks.append(_check(
-                    "cloudwatch_provenance", "warn",
-                    f"current writer={db_instance_id}; no sourced metrics recorded yet",
-                ))
+                checks.append(
+                    _check(
+                        "cloudwatch_provenance",
+                        "warn",
+                        f"current writer={db_instance_id}; no sourced metrics recorded yet",
+                    )
+                )
             elif recorded == db_instance_id:
-                checks.append(_check(
-                    "cloudwatch_provenance", "pass",
-                    f"latest metrics match current writer={db_instance_id}",
-                ))
+                checks.append(
+                    _check(
+                        "cloudwatch_provenance",
+                        "pass",
+                        f"latest metrics match current writer={db_instance_id}",
+                    )
+                )
             else:
-                checks.append(_check(
-                    "cloudwatch_provenance", "fail",
-                    f"latest metrics came from {recorded}; current writer={db_instance_id}",
-                ))
+                checks.append(
+                    _check(
+                        "cloudwatch_provenance",
+                        "fail",
+                        f"latest metrics came from {recorded}; current writer={db_instance_id}",
+                    )
+                )
         elif db_instance_id:
-            checks.append(_check(
-                "cloudwatch_failover", "warn",
-                "fixed instance mode does not follow Aurora writer failovers",
-            ))
+            checks.append(
+                _check(
+                    "cloudwatch_failover",
+                    "warn",
+                    "fixed instance mode does not follow Aurora writer failovers",
+                )
+            )
         return checks
     except ImportError:
         return [_check("cloudwatch_api", "fail", "install whyslow[cloudwatch]")]

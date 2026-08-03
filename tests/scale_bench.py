@@ -1,6 +1,5 @@
 import os
 import shutil
-import sqlite3
 import time
 
 from whyslow.storage import Store

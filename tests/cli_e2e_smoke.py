@@ -61,8 +61,12 @@ def waiter():
 t_collector = threading.Thread(target=run_collector_briefly, args=(4,))
 t_holder = threading.Thread(target=holder)
 t_waiter = threading.Thread(target=waiter)
-t_collector.start(); t_holder.start(); t_waiter.start()
-t_holder.join(); t_waiter.join(); t_collector.join()
+t_collector.start()
+t_holder.start()
+t_waiter.start()
+t_holder.join()
+t_waiter.join()
+t_collector.join()
 
 
 def run_cli(*args):

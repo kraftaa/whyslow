@@ -77,9 +77,14 @@ For development from a checkout:
 ```bash
 # Python 3.10+
 python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[test]"
+.venv/bin/python -m pip install -e ".[test,quality]"
 .venv/bin/whyslow --version
+.venv/bin/ruff check whyslow tests
+.venv/bin/ruff format --check whyslow
 ```
+
+CI records package coverage across the behavioral suite and its subprocesses,
+fails below 80%, and uploads `coverage.xml` for both supported Python versions.
 
 Run every collector on one collector host and point every process at the
 same SQLite file. The Puma control endpoints must be reachable from that

@@ -35,7 +35,16 @@ def summarize_window(store, start_ts, end_ts):
 
     longest_block = None
     for row in edges:
-        ts, blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_usename, blocking_query, ended_ts = row
+        (
+            ts,
+            blocked_pid,
+            blocked_app,
+            blocking_pid,
+            blocking_app,
+            blocking_usename,
+            blocking_query,
+            ended_ts,
+        ) = row
         if blocked_app:
             apps.add(blocked_app)
         if blocking_app:
@@ -92,7 +101,9 @@ def render(result):
         b_n, i_n = b["category_counts"].get(cat, 0), i["category_counts"].get(cat, 0)
         if b_n or i_n:
             lines.append(f"  {cat:<6} sessions:  {b_n} -> {i_n}")
-    lines.append(f"Blocking edges (root cause only): {b['blocking_edges']} -> {i['blocking_edges']}")
+    lines.append(
+        f"Blocking edges (root cause only): {b['blocking_edges']} -> {i['blocking_edges']}"
+    )
     b_long = b["longest_block_seconds"]
     i_long = i["longest_block_seconds"]
     if b_long is not None or i_long is not None:
@@ -101,10 +112,16 @@ def render(result):
             f"{f'{b_long:.0f}s' if b_long is not None else 'n/a'} -> "
             f"{f'{i_long:.0f}s' if i_long is not None else 'n/a'}"
         )
-    lines.append(f"Puma max backlog:     {_fmt_val(b['max_puma_backlog'])} -> {_fmt_val(i['max_puma_backlog'])}")
+    lines.append(
+        f"Puma max backlog:     {_fmt_val(b['max_puma_backlog'])} -> {_fmt_val(i['max_puma_backlog'])}"
+    )
     lines.append(f"CloudWatch max CPU:   {_fmt_val(b['max_cpu'])} -> {_fmt_val(i['max_cpu'])}")
 
-    for label, key in (("Roles", "roles"), ("Apps", "apps"), ("Maintenance patterns", "maintenance_labels")):
+    for label, key in (
+        ("Roles", "roles"),
+        ("Apps", "apps"),
+        ("Maintenance patterns", "maintenance_labels"),
+    ):
         appeared, disappeared = _fmt_set_diff(b[key], i[key])
         lines.append(f"{label}:")
         lines.append(f"  before: {sorted(b[key]) or '(none)'}")

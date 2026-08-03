@@ -3,7 +3,6 @@ import subprocess
 import sys
 import time
 
-import psycopg2
 
 from whyslow.storage import Store
 from whyslow.collector_postgres import PostgresCollector

@@ -42,7 +42,9 @@ class PumaCollector:
                 max_threads = max(max_threads, s.get("max_threads", 0))
                 worst_backlog = max(worst_backlog, s.get("backlog", 0))
                 pc = s.get("pool_capacity", 0)
-                worst_pool_capacity = pc if worst_pool_capacity is None else min(worst_pool_capacity, pc)
+                worst_pool_capacity = (
+                    pc if worst_pool_capacity is None else min(worst_pool_capacity, pc)
+                )
             running = total_running
             pool_capacity = worst_pool_capacity if worst_pool_capacity is not None else 0
             backlog = worst_backlog
@@ -77,10 +79,14 @@ class PumaCollector:
                     expected_interval=self.interval,
                 )
                 if consecutive_failures:
-                    print(f"[whyslow] {self.host_name}: recovered after "
-                          f"{consecutive_failures} failed poll(s)")
+                    print(
+                        f"[whyslow] {self.host_name}: recovered after "
+                        f"{consecutive_failures} failed poll(s)"
+                    )
                     consecutive_failures = 0
-                print(f"[whyslow] {self.host_name}: backlog={backlog} pool_capacity={pool_capacity}")
+                print(
+                    f"[whyslow] {self.host_name}: backlog={backlog} pool_capacity={pool_capacity}"
+                )
                 time.sleep(self.interval)
             except KeyboardInterrupt:
                 break
@@ -89,6 +95,5 @@ class PumaCollector:
                 # must not kill the collector -- it previously did.
                 consecutive_failures += 1
                 if consecutive_failures <= 3 or consecutive_failures % 60 == 0:
-                    print(f"[whyslow] {self.host_name}: poll failed "
-                          f"({consecutive_failures}x): {e}")
+                    print(f"[whyslow] {self.host_name}: poll failed ({consecutive_failures}x): {e}")
                 time.sleep(min(self.interval * consecutive_failures, 30))

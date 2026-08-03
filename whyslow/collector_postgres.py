@@ -147,7 +147,7 @@ def _redact_sql_text(query):
         ):
             quote_index = i + 1
         elif (
-            query[i:i + 2].lower() == "u&"
+            query[i : i + 2].lower() == "u&"
             and i + 2 < length
             and query[i + 2] == "'"
             and _token_boundary_before(query, i)
@@ -279,15 +279,20 @@ class PostgresCollector:
             key = (pid, state, category, safe_query)
             current_session_keys.add(key)
             if key not in self._last_session_keys:
-                session_rows.append(
-                    (pid, backend_type, usename, app, state, category, safe_query)
-                )
+                session_rows.append((pid, backend_type, usename, app, state, category, safe_query))
         self._last_session_keys = current_session_keys
 
         edge_rows = []
         current_edge_keys = set()
         last_blocking_keys_snapshot = self._last_blocking_keys
-        for blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_user, blocking_query in edges:
+        for (
+            blocked_pid,
+            blocked_app,
+            blocking_pid,
+            blocking_app,
+            blocking_user,
+            blocking_query,
+        ) in edges:
             safe_blocking_query = sanitize_query(blocking_query)
             key = (blocked_pid, blocking_pid)
             current_edge_keys.add(key)
@@ -337,18 +342,13 @@ class PostgresCollector:
         """
         now = now or time.time()
         postgres_heartbeat = next(
-            (
-                heartbeat
-                for heartbeat in self.store.get_heartbeats()
-                if heartbeat[0] == "postgres"
-            ),
+            (heartbeat for heartbeat in self.store.get_heartbeats() if heartbeat[0] == "postgres"),
             None,
         )
         if (
             postgres_heartbeat
-            and self.store.collector_coverage_gap_after(
-                "postgres", postgres_heartbeat[1], now
-            ) is not None
+            and self.store.collector_coverage_gap_after("postgres", postgres_heartbeat[1], now)
+            is not None
         ):
             self._last_blocking_keys.clear()
 
@@ -400,8 +400,10 @@ class PostgresCollector:
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                print(f"[whyslow] postgres collector connection lost ({e}); "
-                      f"reconnecting in {backoff:.0f}s")
+                print(
+                    f"[whyslow] postgres collector connection lost ({e}); "
+                    f"reconnecting in {backoff:.0f}s"
+                )
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 60)
             finally:

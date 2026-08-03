@@ -79,7 +79,7 @@ for _ in range(10):
 
 print(f"\npoll_once() under {len(edges)} real blocking edges, over 10 polls:")
 print(f"  min={min(times):.2f}ms  avg={sum(times)/len(times):.2f}ms  max={max(times):.2f}ms")
-print(f"  budget available per poll at interval=1.0s: 1000ms")
+print("  budget available per poll at interval=1.0s: 1000ms")
 
 release.set()
 for t in waiter_threads:

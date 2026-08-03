@@ -129,9 +129,7 @@ class Store:
             # WAL mode: readers and writers never block each other. Check
             # compatibility first so a newer store is refused without even
             # changing its journal mode.
-            self._retry_locked(
-                lambda: self.conn.execute("PRAGMA journal_mode=WAL;").fetchone()
-            )
+            self._retry_locked(lambda: self.conn.execute("PRAGMA journal_mode=WAL;").fetchone())
             self._migrate()
         except Exception:
             self.conn.close()
@@ -149,8 +147,7 @@ class Store:
 
     def _declared_schema_version(self):
         table = self.conn.execute(
-            "SELECT 1 FROM sqlite_master "
-            "WHERE type = 'table' AND name = 'schema_metadata'"
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_metadata'"
         ).fetchone()
         if table is None:
             return 0
@@ -240,13 +237,9 @@ class Store:
             raise SchemaVersionError("incomplete schema migration statement")
 
     def _add_column(self, table, column, column_type):
-        existing = {
-            row[1] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        existing = {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in existing:
-            self.conn.execute(
-                f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"
-            )
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
     # ---- writes (collectors call these) ----
 
@@ -263,7 +256,9 @@ class Store:
     def write_blocking_edges(self, rows, ts=None):
         ts = ts or time.time()
         for row in rows:
-            blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_user, blocking_query = row
+            blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_user, blocking_query = (
+                row
+            )
             existing = self.conn.execute(
                 "SELECT ts FROM blocking_edges "
                 "WHERE blocked_pid = ? AND blocking_pid = ? AND ended_ts IS NULL "
@@ -274,9 +269,7 @@ class Store:
             # original start when coverage was continuous, but create a new
             # episode after a real observation gap (the old edge's resolution
             # is unknowable and must not swallow a later PID-reuse episode).
-            if existing and self.collector_coverage_gap_after(
-                "postgres", existing[0], ts
-            ) is None:
+            if existing and self.collector_coverage_gap_after("postgres", existing[0], ts) is None:
                 continue
             self.conn.execute(
                 "INSERT INTO blocking_edges "
@@ -306,8 +299,7 @@ class Store:
             (metric, ts, source_instance, source_instance),
         )
         self.conn.execute(
-            "INSERT INTO cloudwatch_metrics (ts, metric, value, source_instance) "
-            "VALUES (?,?,?,?)",
+            "INSERT INTO cloudwatch_metrics (ts, metric, value, source_instance) VALUES (?,?,?,?)",
             (ts, metric, value, source_instance),
         )
         self.conn.commit()
@@ -468,8 +460,7 @@ class Store:
         ).fetchone()
         if active_membership is None:
             latest_retired = self.conn.execute(
-                "SELECT max(retired_minute) FROM collector_memberships "
-                "WHERE collector = ?",
+                "SELECT max(retired_minute) FROM collector_memberships WHERE collector = ?",
                 (collector,),
             ).fetchone()[0]
             # A delayed historical heartbeat from inside a retired period
@@ -511,11 +502,13 @@ class Store:
         end_bucket = int(end_ts // 60)
         total = max(end_bucket - start_bucket + 1, 1)
 
-        per_collector = dict(self.conn.execute(
-            "SELECT collector, count(*) FROM collector_coverage "
-            "WHERE minute_bucket BETWEEN ? AND ? GROUP BY collector",
-            (start_bucket, end_bucket),
-        ).fetchall())
+        per_collector = dict(
+            self.conn.execute(
+                "SELECT collector, count(*) FROM collector_coverage "
+                "WHERE minute_bucket BETWEEN ? AND ? GROUP BY collector",
+                (start_bucket, end_bucket),
+            ).fetchall()
+        )
         membership_rows = self.conn.execute(
             "SELECT collector, started_minute, retired_minute "
             "FROM collector_memberships ORDER BY collector, started_minute"
@@ -607,11 +600,14 @@ class Store:
         """Earliest/latest timestamp and row count per data table -- used by
         `whyslow status` to show what windows are actually explainable."""
         coverage = {}
-        for table in ("session_changes", "blocking_edges", "puma_stats",
-                       "cloudwatch_metrics", "events"):
-            row = self.conn.execute(
-                f"SELECT min(ts), max(ts), count(*) FROM {table}"
-            ).fetchone()
+        for table in (
+            "session_changes",
+            "blocking_edges",
+            "puma_stats",
+            "cloudwatch_metrics",
+            "events",
+        ):
+            row = self.conn.execute(f"SELECT min(ts), max(ts), count(*) FROM {table}").fetchone()
             coverage[table] = {"min_ts": row[0], "max_ts": row[1], "count": row[2]}
         return coverage
 
@@ -647,9 +643,7 @@ class Store:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             raise FileExistsError(f"backup destination already exists: {destination}")
-        if str(self.path) != ":memory:" and (
-            destination.resolve() == self.path.resolve()
-        ):
+        if str(self.path) != ":memory:" and (destination.resolve() == self.path.resolve()):
             raise ValueError("backup destination must differ from the evidence store")
 
         descriptor, temporary_name = tempfile.mkstemp(
@@ -666,9 +660,7 @@ class Store:
             self.conn.backup(backup_conn)
             integrity = backup_conn.execute("PRAGMA integrity_check").fetchall()
             if integrity != [("ok",)]:
-                raise sqlite3.DatabaseError(
-                    f"backup integrity check failed: {integrity[:3]}"
-                )
+                raise sqlite3.DatabaseError(f"backup integrity check failed: {integrity[:3]}")
             row = backup_conn.execute(
                 "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
             ).fetchone()

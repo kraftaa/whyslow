@@ -58,6 +58,7 @@ def _arg_value(validator, label=None):
             return validator(value) if label is None else validator(value, label)
         except ValueError as exc:
             raise argparse.ArgumentTypeError(str(exc)) from exc
+
     return parse
 
 
@@ -161,9 +162,7 @@ def parse_time(s):
 
 def cmd_collect_pg(args):
     if not args.dsn:
-        raise SystemExit(
-            "Postgres DSN required: set WHYSLOW_PG_DSN or pass --dsn"
-        )
+        raise SystemExit("Postgres DSN required: set WHYSLOW_PG_DSN or pass --dsn")
     store = Store(args.db)
     collector = PostgresCollector(args.dsn, store, interval=args.interval)
     collector.run_forever()
@@ -171,12 +170,15 @@ def cmd_collect_pg(args):
 
 def cmd_collect_puma(args):
     store = Store(args.db)
-    collector = PumaCollector(args.host_name, args.stats_url, store, interval=args.interval, auth_token=args.token)
+    collector = PumaCollector(
+        args.host_name, args.stats_url, store, interval=args.interval, auth_token=args.token
+    )
     collector.run_forever()
 
 
 def cmd_collect_cw(args):
     from .collector_cloudwatch import CloudWatchCollector
+
     store = Store(args.db)
     collector = CloudWatchCollector(
         args.db_instance_id,
@@ -241,7 +243,7 @@ def cmd_backup(args):
         store.close()
 
     backups = sorted(output_dir.glob("whyslow-*.sqlite3"))
-    expired = backups[:-args.keep]
+    expired = backups[: -args.keep]
     for old_backup in expired:
         old_backup.unlink()
     print(
@@ -310,13 +312,17 @@ def cmd_diff(args):
 
     result = diff_mod.diff(store, baseline_start, baseline_end, incident_start, incident_end)
     if args.json:
-        print(json_output.dumps(json_output.diff_document(
-            result,
-            baseline_start,
-            baseline_end,
-            incident_start,
-            incident_end,
-        )))
+        print(
+            json_output.dumps(
+                json_output.diff_document(
+                    result,
+                    baseline_start,
+                    baseline_end,
+                    incident_start,
+                    incident_end,
+                )
+            )
+        )
     else:
         print(diff_mod.render(result))
 
@@ -354,11 +360,13 @@ def main(argv=None):
     p = sub.add_parser("collect-cw", help="poll CloudWatch CPU/connections (requires boto3)")
     target = p.add_mutually_exclusive_group(required=True)
     target.add_argument(
-        "--db-cluster-id", type=rds_cluster_id_arg,
+        "--db-cluster-id",
+        type=rds_cluster_id_arg,
         help="Aurora cluster identifier; automatically follows its current writer",
     )
     target.add_argument(
-        "--db-instance-id", type=rds_instance_id_arg,
+        "--db-instance-id",
+        type=rds_instance_id_arg,
         help="fixed RDS instance identifier (standalone/compatibility mode)",
     )
     p.add_argument("--region", default=None)
@@ -367,8 +375,11 @@ def main(argv=None):
     p.set_defaults(func=cmd_collect_cw)
 
     p = sub.add_parser("explain", help="reconstruct a timeline + evidence for a window")
-    p.add_argument("--last", metavar="DURATION",
-                    help="window ending now, e.g. 15m, 2h, 90s (alternative to --from/--to)")
+    p.add_argument(
+        "--last",
+        metavar="DURATION",
+        help="window ending now, e.g. 15m, 2h, 90s (alternative to --from/--to)",
+    )
     p.add_argument(
         "--from",
         dest="from_",
@@ -437,10 +448,16 @@ def main(argv=None):
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("diff", help="compare a healthy baseline window against an incident window")
-    p.add_argument("--last", metavar="DURATION",
-                    help="incident window ending now, e.g. 15m (alternative to --from/--to)")
-    p.add_argument("--baseline-last", metavar="DURATION",
-                    help="baseline of this length immediately before the incident window")
+    p.add_argument(
+        "--last",
+        metavar="DURATION",
+        help="incident window ending now, e.g. 15m (alternative to --from/--to)",
+    )
+    p.add_argument(
+        "--baseline-last",
+        metavar="DURATION",
+        help="baseline of this length immediately before the incident window",
+    )
     p.add_argument("--baseline-from")
     p.add_argument("--baseline-to")
     p.add_argument("--from", dest="from_")
@@ -452,30 +469,32 @@ def main(argv=None):
     p = sub.add_parser("event", help="record a deploy/job marker (one line in your CI/CD pipeline)")
     p.add_argument(
         "--source",
-        type=_arg_value(lambda value: validate_identifier(
-            validate_text(
-                value,
+        type=_arg_value(
+            lambda value: validate_identifier(
+                validate_text(
+                    value,
+                    "event source",
+                    MAX_EVENT_SOURCE_CHARS,
+                    required=True,
+                ),
                 "event source",
-                MAX_EVENT_SOURCE_CHARS,
-                required=True,
-            ),
-            "event source",
-        )),
+            )
+        ),
         required=True,
         help="e.g. deploy, dbt, airflow, manual",
     )
     p.add_argument(
         "--kind",
-        type=_arg_value(lambda value: validate_text(
-            value, "event kind", MAX_EVENT_KIND_CHARS, required=True
-        )),
+        type=_arg_value(
+            lambda value: validate_text(value, "event kind", MAX_EVENT_KIND_CHARS, required=True)
+        ),
         help="e.g. 'v1.2.3 released', 'nightly_rollup started'",
     )
     p.add_argument(
         "--payload",
-        type=_arg_value(lambda value: validate_text(
-            value, "event payload", MAX_EVENT_PAYLOAD_CHARS
-        )),
+        type=_arg_value(
+            lambda value: validate_text(value, "event payload", MAX_EVENT_PAYLOAD_CHARS)
+        ),
         help="optional extra detail (sha, job id, ...)",
     )
     p.add_argument("--at", help="timestamp (ISO-8601, HH:MM UTC, or epoch); defaults to now")
@@ -488,8 +507,10 @@ def main(argv=None):
     # isn't a bare -h/--help, so `whyslow status` etc. still work.
     argv_list = list(sys.argv[1:] if argv is None else argv)
     known = set(sub.choices)
-    if argv_list and argv_list[0] not in known and argv_list[0] not in (
-        "-h", "--help", "--version"
+    if (
+        argv_list
+        and argv_list[0] not in known
+        and argv_list[0] not in ("-h", "--help", "--version")
     ):
         argv_list = ["explain"] + argv_list
     elif not argv_list:
