@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 import time
@@ -175,6 +176,24 @@ def cmd_retire(args):
     print(f"[whyslow] retired collector: {args.collector} at {ts:.0f}")
 
 
+def cmd_doctor(args):
+    from . import doctor as doctor_mod
+
+    store = Store(args.db)
+    result = doctor_mod.doctor(
+        store,
+        dsn=os.environ.get("WHYSLOW_PG_DSN"),
+        puma_url=os.environ.get("WHYSLOW_PUMA_STATS_URL"),
+        puma_token=os.environ.get("WHYSLOW_PUMA_TOKEN"),
+        db_instance_id=args.db_instance_id or os.environ.get("WHYSLOW_DB_INSTANCE_ID"),
+        region=args.region,
+    )
+    store.close()
+    print(json.dumps(result, indent=2, sort_keys=True) if args.json else doctor_mod.render(result))
+    if not result["ok"]:
+        sys.exit(1)
+
+
 def cmd_diff(args):
     store = Store(args.db)
     incident_start, incident_end = resolve_window(args)
@@ -266,6 +285,16 @@ def main(argv=None):
     )
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.set_defaults(func=cmd_retire)
+
+    p = sub.add_parser("doctor", help="check deployment and collector readiness")
+    p.add_argument("--db", default=".whyslow/store.sqlite3")
+    p.add_argument(
+        "--db-instance-id",
+        help="RDS instance identifier (default: WHYSLOW_DB_INSTANCE_ID)",
+    )
+    p.add_argument("--region", default=None)
+    p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("diff", help="compare a healthy baseline window against an incident window")
     p.add_argument("--last", metavar="DURATION",

@@ -87,7 +87,7 @@ export WHYSLOW_PUMA_TOKEN="replace-me"
 
 whyslow collect-pg    --db /var/lib/whyslow/store.sqlite3
 whyslow collect-puma  --host-name web-3 --stats-url https://web-3.internal:9293/stats --db /var/lib/whyslow/store.sqlite3
-whyslow collect-cw    --db-instance-id my-aurora-cluster --db /var/lib/whyslow/store.sqlite3
+whyslow collect-cw    --db-instance-id my-aurora-writer-instance --db /var/lib/whyslow/store.sqlite3
 ```
 
 `--dsn` and `--token` remain available for local testing, but environment
@@ -475,7 +475,16 @@ died three weeks ago, you do not want to discover that at 2am.
 
 ```bash
 whyslow status
+whyslow doctor
 ```
+
+`whyslow doctor` checks SQLite integrity, WAL mode, schema shape, private
+file permissions, free disk space, required collector health, and the
+configured Postgres, Puma, and CloudWatch dependencies. Live credentials
+come from `WHYSLOW_PG_DSN`, `WHYSLOW_PUMA_STATS_URL` /
+`WHYSLOW_PUMA_TOKEN`, and `WHYSLOW_DB_INSTANCE_ID`, so they stay out of
+process arguments and diagnostic output. Use `whyslow doctor --json` for
+automation.
 
 ```
 Collectors

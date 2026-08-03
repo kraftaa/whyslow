@@ -23,9 +23,20 @@ whyslow collect-puma --host-name web-3 \
   --stats-url https://web-3.internal:9293/stats \
   --db /var/lib/whyslow/store.sqlite3
 
-whyslow collect-cw --db-instance-id my-aurora-cluster \
+whyslow collect-cw --db-instance-id my-aurora-writer-instance \
   --db /var/lib/whyslow/store.sqlite3
 ```
+
+The Postgres login needs visibility into other sessions; grant the
+built-in monitoring role once:
+
+```sql
+GRANT pg_read_all_stats TO whyslow_user;
+```
+
+For CloudWatch, `--db-instance-id` must be the current RDS **instance**
+identifier, not an Aurora cluster identifier. `whyslow doctor` fails if
+the configured dimension returns no recent CPU datapoints.
 
 Do not run these against separate local stores on each web server: the
 tool cannot correlate timelines split across files. Use the systemd units
@@ -40,6 +51,7 @@ Then verify it's actually working, and check again occasionally:
 
 ```bash
 whyslow status     # exits non-zero if any collector is stale
+whyslow doctor     # validates store, schema, disk, collectors, and dependencies
 ```
 
 When a Puma host is deliberately removed from service, retire its

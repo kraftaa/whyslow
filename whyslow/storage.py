@@ -1,4 +1,5 @@
 import sqlite3
+import stat
 import time
 from pathlib import Path
 
@@ -119,6 +120,9 @@ class Store:
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.original_mode = None
+        if str(self.path) != ":memory:" and self.path.exists():
+            self.original_mode = stat.S_IMODE(self.path.stat().st_mode)
         self.conn = sqlite3.connect(str(self.path), timeout=30)
         if str(self.path) != ":memory:":
             self.path.chmod(0o600)

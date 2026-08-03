@@ -90,6 +90,9 @@ jobs:
       - name: Collector liveness / status smoke test
         run: python3 tests/status_smoke.py
 
+      - name: Deployment doctor smoke test
+        run: python3 tests/doctor_smoke.py
+
       - name: End-to-end CLI test (status, --last windows, diff --baseline-last)
         run: python3 tests/cli_e2e_smoke.py
 
