@@ -14,7 +14,7 @@ Issues = "https://github.com/kraftaa/whyslow/issues"
 
 [project.optional-dependencies]
 cloudwatch = ["boto3>=1.34"]
-test = ["boto3>=1.34", "moto[cloudwatch]>=5.0"]
+test = ["boto3>=1.34", "moto[cloudwatch]>=5.2.2"]
 
 [project.scripts]
 whyslow = "whyslow.cli:main"
