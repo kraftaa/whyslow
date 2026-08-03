@@ -35,7 +35,7 @@ def _fmt_ts(ts):
 
 
 def status(store, now=None):
-    now = now or time.time()
+    now = time.time() if now is None else now
     heartbeats = store.get_heartbeats()
     now_minute = int(now // 60)
     memberships = store.get_collector_memberships()

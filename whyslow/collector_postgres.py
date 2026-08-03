@@ -340,7 +340,7 @@ class PostgresCollector:
         complete uncovered minute, however, continuity is unknowable and an
         edge still present must be recorded as a new episode.
         """
-        now = now or time.time()
+        now = time.time() if now is None else now
         postgres_heartbeat = next(
             (heartbeat for heartbeat in self.store.get_heartbeats() if heartbeat[0] == "postgres"),
             None,

@@ -134,6 +134,9 @@ jobs:
       - name: CLI and collector input-validation test
         run: python3 tests/input_validation_smoke.py
 
+      - name: Explicit zero-timestamp regression test
+        run: python3 tests/timestamp_zero_smoke.py
+
       - name: Secret configuration test (credentials stay out of process arguments)
         run: python3 tests/secret_config_smoke.py
 

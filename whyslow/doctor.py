@@ -47,7 +47,7 @@ def doctor(
     region=None,
     now=None,
 ):
-    now = now or time.time()
+    now = time.time() if now is None else now
     checks = []
     checks.extend(_check_store(store))
     checks.extend(_check_collectors(store, now))

@@ -244,7 +244,7 @@ class Store:
     # ---- writes (collectors call these) ----
 
     def write_sessions(self, rows, ts=None):
-        ts = ts or time.time()
+        ts = time.time() if ts is None else ts
         self.conn.executemany(
             "INSERT INTO session_changes "
             "(ts, pid, backend_type, usename, application_name, state, category, query) "
@@ -254,7 +254,7 @@ class Store:
         self.conn.commit()
 
     def write_blocking_edges(self, rows, ts=None):
-        ts = ts or time.time()
+        ts = time.time() if ts is None else ts
         for row in rows:
             blocked_pid, blocked_app, blocking_pid, blocking_app, blocking_user, blocking_query = (
                 row
@@ -280,7 +280,7 @@ class Store:
         self.conn.commit()
 
     def write_puma_stat(self, host, backlog, pool_capacity, max_threads, running, rss_mb, ts=None):
-        ts = ts or time.time()
+        ts = time.time() if ts is None else ts
         self.conn.execute(
             "INSERT INTO puma_stats (ts, host, backlog, pool_capacity, max_threads, running, rss_mb) "
             "VALUES (?,?,?,?,?,?,?)",
@@ -289,7 +289,7 @@ class Store:
         self.conn.commit()
 
     def write_cloudwatch_metric(self, metric, value, ts=None, source_instance=None):
-        ts = ts or time.time()
+        ts = time.time() if ts is None else ts
         # CloudWatch queries overlap to tolerate publication lag, so the
         # same datapoint can be returned by consecutive polls. Replace any
         # prior copy instead of growing duplicates or counting it twice.
@@ -325,7 +325,7 @@ class Store:
             "event payload",
             MAX_EVENT_PAYLOAD_CHARS,
         )
-        ts = ts or time.time()
+        ts = time.time() if ts is None else ts
         self.conn.execute(
             "INSERT INTO events (ts, source, kind, payload) VALUES (?,?,?,?)",
             (ts, source, kind, payload),
@@ -344,7 +344,7 @@ class Store:
     def mark_blocking_edges_ended(self, edge_keys, ts=None):
         """Mark (blocked_pid, blocking_pid) pairs as no longer observed.
         Updates the most recent unresolved row for each pair."""
-        ts = ts or time.time()
+        ts = time.time() if ts is None else ts
         for blocked_pid, blocking_pid in edge_keys:
             self.conn.execute(
                 "UPDATE blocking_edges SET ended_ts = ? "
@@ -437,7 +437,7 @@ class Store:
         instance_role=None,
         expected_interval=None,
     ):
-        ts = ts or time.time()
+        ts = time.time() if ts is None else ts
         self.conn.execute(
             "INSERT INTO collector_heartbeats "
             "(collector, ts, detail, instance_role, expected_interval) "
@@ -475,7 +475,7 @@ class Store:
 
     def retire_collector(self, collector, ts=None):
         """Retire a known collector without deleting historical evidence."""
-        ts = ts or time.time()
+        ts = time.time() if ts is None else ts
         minute = int(ts // 60)
         cur = self.conn.execute(
             "UPDATE collector_memberships SET retired_minute = ? "
@@ -615,7 +615,7 @@ class Store:
         """Delete rows older than each table's retention window. Cheap and
         safe to call frequently -- collectors call this periodically, not
         on every poll."""
-        now = now or time.time()
+        now = time.time() if now is None else now
         deleted = {}
         for table, retention in RETENTION_SECONDS.items():
             cutoff = now - retention
