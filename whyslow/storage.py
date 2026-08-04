@@ -107,6 +107,31 @@ RETENTION_SECONDS = {
     # events: no automatic pruning -- volume is tiny, retained indefinitely
 }
 
+# SQLite cannot parameterise table or column identifiers, so a handful of
+# queries interpolate them into the SQL string. Every such site validates
+# against these allowlists first, so the pattern stays injection-safe by
+# construction even if a caller is later wired to pass a non-constant name.
+KNOWN_TABLES = frozenset(
+    {
+        "session_changes",
+        "blocking_edges",
+        "puma_stats",
+        "cloudwatch_metrics",
+        "events",
+        "collector_heartbeats",
+        "collector_coverage",
+        "schema_metadata",
+        "collector_memberships",
+    }
+)
+ALLOWED_COLUMN_TYPES = frozenset({"TEXT", "INTEGER", "REAL", "BLOB", "NUMERIC"})
+
+
+def require_known_table(table):
+    if table not in KNOWN_TABLES:
+        raise ValueError(f"unknown table name: {table!r}")
+    return table
+
 
 class Store:
     def __init__(self, path):
@@ -237,6 +262,11 @@ class Store:
             raise SchemaVersionError("incomplete schema migration statement")
 
     def _add_column(self, table, column, column_type):
+        require_known_table(table)
+        if not column.isidentifier():
+            raise ValueError(f"invalid column name: {column!r}")
+        if column_type not in ALLOWED_COLUMN_TYPES:
+            raise ValueError(f"unsupported column type: {column_type!r}")
         existing = {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in existing:
             self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
@@ -607,6 +637,7 @@ class Store:
             "cloudwatch_metrics",
             "events",
         ):
+            require_known_table(table)
             row = self.conn.execute(f"SELECT min(ts), max(ts), count(*) FROM {table}").fetchone()
             coverage[table] = {"min_ts": row[0], "max_ts": row[1], "count": row[2]}
         return coverage
@@ -618,6 +649,7 @@ class Store:
         now = time.time() if now is None else now
         deleted = {}
         for table, retention in RETENTION_SECONDS.items():
+            require_known_table(table)
             cutoff = now - retention
             cur = self.conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
             deleted[table] = cur.rowcount

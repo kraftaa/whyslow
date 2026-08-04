@@ -93,20 +93,27 @@ class CloudWatchCollector:
                 Statistics=["Average"],
             )
             points = sorted(resp.get("Datapoints", []), key=lambda p: p["Timestamp"])
-            if points:
-                point = points[-1]
-                value = point["Average"]
+            for point in points:
+                # Write every datapoint in the look-back window, not only the
+                # newest one. The window widens to interval*3 to tolerate
+                # CloudWatch publication lag and to back-fill after a poll
+                # failure -- keeping only points[-1] silently dropped the
+                # earlier minutes, leaving holes. write_cloudwatch_metric is
+                # idempotent per (metric, ts, source), so re-writing overlap
+                # from consecutive polls is safe.
+                #
                 # The query intentionally looks behind "now" to tolerate
-                # CloudWatch publication lag. Recording collection time here
-                # shifted evidence by minutes and broke 10-second incident
-                # correlation. Preserve the measurement's real timestamp.
+                # publication lag. Recording collection time here shifted
+                # evidence by minutes and broke 10-second incident
+                # correlation. Preserve each measurement's real timestamp.
                 self.store.write_cloudwatch_metric(
                     metric,
-                    value,
+                    point["Average"],
                     ts=point["Timestamp"].timestamp(),
                     source_instance=db_instance_id,
                 )
-                results[metric] = value
+            if points:
+                results[metric] = points[-1]["Average"]
         return results
 
     def run_forever(self):
