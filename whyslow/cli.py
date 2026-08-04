@@ -163,37 +163,37 @@ def parse_time(s):
 def cmd_collect_pg(args):
     if not args.dsn:
         raise SystemExit("Postgres DSN required: set WHYSLOW_PG_DSN or pass --dsn")
-    store = Store(args.db)
-    collector = PostgresCollector(args.dsn, store, interval=args.interval)
-    collector.run_forever()
+    with Store(args.db) as store:
+        collector = PostgresCollector(args.dsn, store, interval=args.interval)
+        collector.run_forever()
 
 
 def cmd_collect_puma(args):
-    store = Store(args.db)
-    collector = PumaCollector(
-        args.host_name, args.stats_url, store, interval=args.interval, auth_token=args.token
-    )
-    collector.run_forever()
+    with Store(args.db) as store:
+        collector = PumaCollector(
+            args.host_name, args.stats_url, store, interval=args.interval, auth_token=args.token
+        )
+        collector.run_forever()
 
 
 def cmd_collect_cw(args):
     from .collector_cloudwatch import CloudWatchCollector
 
-    store = Store(args.db)
-    collector = CloudWatchCollector(
-        args.db_instance_id,
-        store,
-        interval=args.interval,
-        region=args.region,
-        db_cluster_id=args.db_cluster_id,
-    )
-    collector.run_forever()
+    with Store(args.db) as store:
+        collector = CloudWatchCollector(
+            args.db_instance_id,
+            store,
+            interval=args.interval,
+            region=args.region,
+            db_cluster_id=args.db_cluster_id,
+        )
+        collector.run_forever()
 
 
 def cmd_explain(args):
     start_ts, end_ts = resolve_window(args)
-    store = Store(args.db)
-    result = explain_mod.explain(store, start_ts, end_ts)
+    with Store(args.db) as store:
+        result = explain_mod.explain(store, start_ts, end_ts)
     if args.json:
         print(json_output.dumps(json_output.explain_document(result, start_ts, end_ts)))
     else:
@@ -202,14 +202,14 @@ def cmd_explain(args):
 
 def cmd_event(args):
     ts = parse_time(args.at) if args.at else time.time()
-    store = Store(args.db)
-    store.write_event(args.source, args.kind, args.payload, ts=ts)
+    with Store(args.db) as store:
+        store.write_event(args.source, args.kind, args.payload, ts=ts)
     print(f"[whyslow] recorded event: source={args.source} kind={args.kind} at {ts:.0f}")
 
 
 def cmd_status(args):
-    store = Store(args.db)
-    result = status_mod.status(store)
+    with Store(args.db) as store:
+        result = status_mod.status(store)
     healthy = status_mod.is_healthy(result)
     if args.json:
         print(json_output.dumps(json_output.status_document(result, healthy)))
@@ -222,9 +222,8 @@ def cmd_status(args):
 
 
 def cmd_prune(args):
-    store = Store(args.db)
-    deleted = store.prune()
-    store.close()
+    with Store(args.db) as store:
+        deleted = store.prune()
     summary = ", ".join(f"{table}={count}" for table, count in sorted(deleted.items()))
     print(f"[whyslow] pruned old rows: {summary}")
 
@@ -236,11 +235,8 @@ def cmd_backup(args):
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     destination = output_dir / f"whyslow-{timestamp}.sqlite3"
 
-    store = Store(args.db)
-    try:
+    with Store(args.db) as store:
         store.backup(destination)
-    finally:
-        store.close()
 
     backups = sorted(output_dir.glob("whyslow-*.sqlite3"))
     expired = backups[: -args.keep]
@@ -256,34 +252,31 @@ def cmd_retire(args):
     ts = parse_time(args.at) if args.at else time.time()
     if ts > time.time():
         raise SystemExit("collector retirement time cannot be in the future")
-    store = Store(args.db)
-    if not store.retire_collector(args.collector, ts=ts):
-        store.close()
-        raise SystemExit(f"unknown collector: {args.collector}")
-    store.close()
+    with Store(args.db) as store:
+        if not store.retire_collector(args.collector, ts=ts):
+            raise SystemExit(f"unknown collector: {args.collector}")
     print(f"[whyslow] retired collector: {args.collector} at {ts:.0f}")
 
 
 def cmd_doctor(args):
     from . import doctor as doctor_mod
 
-    store = Store(args.db)
     db_cluster_id = args.db_cluster_id
     db_instance_id = args.db_instance_id
     if not db_cluster_id and not db_instance_id:
         db_cluster_id = os.environ.get("WHYSLOW_DB_CLUSTER_ID")
         if not db_cluster_id:
             db_instance_id = os.environ.get("WHYSLOW_DB_INSTANCE_ID")
-    result = doctor_mod.doctor(
-        store,
-        dsn=os.environ.get("WHYSLOW_PG_DSN"),
-        puma_url=os.environ.get("WHYSLOW_PUMA_STATS_URL"),
-        puma_token=os.environ.get("WHYSLOW_PUMA_TOKEN"),
-        db_cluster_id=db_cluster_id,
-        db_instance_id=db_instance_id,
-        region=args.region,
-    )
-    store.close()
+    with Store(args.db) as store:
+        result = doctor_mod.doctor(
+            store,
+            dsn=os.environ.get("WHYSLOW_PG_DSN"),
+            puma_url=os.environ.get("WHYSLOW_PUMA_STATS_URL"),
+            puma_token=os.environ.get("WHYSLOW_PUMA_TOKEN"),
+            db_cluster_id=db_cluster_id,
+            db_instance_id=db_instance_id,
+            region=args.region,
+        )
     print(json.dumps(result, indent=2, sort_keys=True) if args.json else doctor_mod.render(result))
     if not result["ok"]:
         sys.exit(1)
@@ -308,9 +301,8 @@ def cmd_diff(args):
             args.baseline_to,
         )
 
-    store = Store(args.db)
-
-    result = diff_mod.diff(store, baseline_start, baseline_end, incident_start, incident_end)
+    with Store(args.db) as store:
+        result = diff_mod.diff(store, baseline_start, baseline_end, incident_start, incident_end)
     if args.json:
         print(
             json_output.dumps(
