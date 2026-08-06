@@ -115,4 +115,48 @@ def run():
     print("\nPASS: CloudWatch metrics follow Aurora failover and retain source provenance")
 
 
+@mock_aws
+def run_backfill():
+    """Regression: a single poll must store *every* datapoint in the
+    look-back window, not just the newest. The window is intentionally wider
+    than the interval (interval*3, min 120s) so a recovered collector can
+    back-fill the minutes it missed -- keeping only points[-1] left holes."""
+    from whyslow.collector_cloudwatch import CloudWatchCollector
+
+    client = boto3.client("cloudwatch", region_name="us-east-1")
+    now = datetime.now(timezone.utc)
+    # Default interval=60 -> look-back window [now-300, now-120]. Place three
+    # datapoints in three distinct minute buckets inside that window.
+    offsets = (140, 205, 270)
+    values = {140: 55.0, 205: 66.0, 270: 77.0}
+    for off in offsets:
+        client.put_metric_data(
+            Namespace="AWS/RDS",
+            MetricData=[{
+                "MetricName": "CPUUtilization",
+                "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": "solo"}],
+                "Timestamp": now - timedelta(seconds=off),
+                "Value": values[off],
+                "Unit": "Percent",
+            }],
+        )
+
+    shutil.rmtree("/tmp/cw_smoke_backfill", ignore_errors=True)
+    store = Store("/tmp/cw_smoke_backfill/store.sqlite3")
+    collector = CloudWatchCollector(
+        "solo", store, region="us-east-1", cloudwatch_client=client
+    )
+    collector.poll_once()
+
+    cpu_rows = [
+        v for _, m, v, _ in store.cloudwatch_metrics_in(0, time.time() + 1) if m == "CPUUtilization"
+    ]
+    assert sorted(cpu_rows) == sorted(values.values()), (
+        f"expected all three datapoints back-filled, got {cpu_rows}"
+    )
+    store.close()
+    print("PASS: a single poll back-fills every datapoint in the look-back window, not just the last")
+
+
 run()
+run_backfill()

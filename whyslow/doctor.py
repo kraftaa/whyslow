@@ -9,7 +9,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from . import status as status_mod
-from .storage import SCHEMA_VERSION
+from .storage import SCHEMA_VERSION, require_known_table
 from .collector_cloudwatch import resolve_cluster_writer
 from .validation import (
     validate_http_url,
@@ -93,6 +93,7 @@ def _check_store(store):
 
     missing = []
     for table, required_columns in REQUIRED_SCHEMA.items():
+        require_known_table(table)
         columns = {row[1] for row in store.conn.execute(f"PRAGMA table_info({table})").fetchall()}
         absent = sorted(required_columns - columns)
         if absent:
