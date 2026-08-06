@@ -1,63 +1,43 @@
 # whyslow
 
-**Why is it slow?** Deterministic, evidence-first incident reconstruction
-for Aurora Postgres + Puma — not another monitoring dashboard.
+**Why is it slow?** Deterministic, evidence-first incident reconstruction for
+Aurora Postgres + Puma — not another monitoring dashboard.
 
-A deterministic, evidence-first CLI that reconstructs why web servers
-slowed down — instead of a team manually cross-referencing Puma stats,
-CloudWatch, and `pg_stat_activity` mid-incident.
+A CLI that reconstructs *why* web servers slowed down, from data already being
+collected — instead of a team hand-correlating Puma stats, CloudWatch, and
+`pg_stat_activity` by eye at 2am.
 
 ```
-whyslow --from 11:42 --to 11:47
+whyslow --from 11:42 --to 11:47      # or: whyslow --last 15m
 ```
 
-**During an incident, go straight to [RUNBOOK.md](RUNBOOK.md)** — what to type, and what each answer means.
+**During an incident, go straight to [RUNBOOK.md](RUNBOOK.md)** — what to type,
+and what each answer means.
 
 ## Why this exists
 
-"Production is slow" usually collapses into one of a few root causes —
-a Postgres lock chain, an app-server thread pool pinned waiting on
-slow queries, or a resource-contention event (a reindex, a bulk load,
-autovacuum, a cronjob — anything sharing the DB instance's CPU/IO).
-Nobody wants to manually correlate three dashboards' timestamps by eye
-at 2am. This does it from data already being collected.
+"Production is slow" usually collapses into one of a few root causes — a
+Postgres lock chain, an app-server thread pool pinned on slow queries, or a
+resource-contention event (a reindex, a bulk load, autovacuum, a cronjob —
+anything sharing the DB instance's CPU/IO). This correlates the three places
+you'd otherwise check by hand and reconstructs the incident window into one
+plain-English timeline.
 
-## How it works, in six steps (no model, no statistics)
+## How it works
 
-1. Fetch blocking edges, Puma stats, metrics, and events inside the
-   requested window; aggregate high-volume session changes by minute
-   and wait category in SQLite so wide windows stay bounded.
-2. Merge everything by timestamp into one plain-English timeline.
-3. Find candidates: any pid that appears as a *blocker*, or any
-   sustained cluster of CPU/IO-bound sessions.
-4. For each candidate, check a **fixed, readable list** of named
-   signals — each one a lookup: does a row exist, is a timestamp
-   within `COOCCURRENCE_WINDOW_SECONDS` of another.
-5. Count how many named signals fired and apply fixed thresholds:
-   at least 75% High, at least 50% Medium, anything above zero Low.
-6. Render the timeline, contributors, and the exact evidence lines
-   that caused each confidence label.
+No model, no statistics, no scoring formula — every conclusion is a lookup
+against rows the collectors already wrote. Three collectors (Postgres, Puma,
+CloudWatch) write to one SQLite file on a timer; `explain` reconstructs any
+past window from that stored data, names the contributors, and shows the exact
+evidence lines behind each one. Every tunable lives in plain sight at the top
+of `explain.py`.
 
-Every constant that drives step 4/5 lives at the top of `explain.py`,
-in plain sight, inspectable and editable — nothing is tuned in a way
-you can't read.
+See **[docs/design.md](docs/design.md)** for the six-step mechanism, why it
+needs no named integrations, and the evidence that it works.
 
-## Why detection needs no named integrations
+## Quickstart
 
-Aurora is fully managed: nothing can consume DB-instance CPU/IO or
-hold a lock without going through a Postgres session. Reading
-`backend_type` alongside `pg_stat_activity` means `autovacuum worker`,
-`walsender`, and `parallel worker` sessions are distinguished from
-normal client backends automatically — so autovacuum, a stray
-cronjob, an ad hoc script, or anything you've never named shows up
-the same way dbt or a known job would, with zero setup. dbt/Airflow/
-deploy-webhook event ingestion is optional future enrichment, not the
-detection mechanism.
-
-## Setup
-
-**Do this first, independent of installing anything** — tag DB
-connections by host so activity is attributable:
+Tag DB connections by host so activity is attributable:
 
 ```yaml
 # config/database.yml
@@ -65,374 +45,51 @@ production:
   application_name: <%= "web-#{Socket.gethostname}" %>
 ```
 
-Production installs use the tested wheel from a private GitHub release in a
-versioned environment under `/opt/whyslow`; see [INSTALL.md](INSTALL.md) for
-checksum verification, systemd setup, upgrades, and rollback. Every release
-dependency tree is vulnerability-audited before publication and ships with a
-checksummed CycloneDX JSON SBOM. Workflow actions are pinned to immutable
-commits.
-
-For development from a checkout:
-
-```bash
-# Python 3.10+
-python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[test,quality]"
-.venv/bin/whyslow --version
-.venv/bin/ruff check whyslow tests
-.venv/bin/ruff format --check whyslow
-```
-
-CI records package coverage across the behavioral suite and its subprocesses,
-fails below 80%, and uploads `coverage.xml` for both supported Python versions.
-
-Run every collector on one collector host and point every process at the
-same SQLite file. The Puma control endpoints must be reachable from that
-host over a private TLS connection or tunnel; running collectors
-independently on each web server creates isolated stores that cannot be
-correlated.
-
-Use long-lived processes (systemd unit, supervisor, whatever you already
-use):
+Run the collectors as long-lived processes on one collector host, all pointed
+at the same SQLite file:
 
 ```bash
 export WHYSLOW_PG_DSN="postgresql://user:pass@host/db"
-export WHYSLOW_PUMA_TOKEN="replace-me"
 export WHYSLOW_DB_CLUSTER_ID="my-aurora-cluster"
 
-whyslow collect-pg    --db /var/lib/whyslow/store.sqlite3
-whyslow collect-puma  --host-name web-3 --stats-url https://web-3.internal:9293/stats --db /var/lib/whyslow/store.sqlite3
-whyslow collect-cw    --db-cluster-id "$WHYSLOW_DB_CLUSTER_ID" --db /var/lib/whyslow/store.sqlite3
+whyslow collect-pg   --db /var/lib/whyslow/store.sqlite3
+whyslow collect-puma --host-name web-3 --stats-url https://web-3.internal:9293/stats --db /var/lib/whyslow/store.sqlite3
+whyslow collect-cw   --db-cluster-id "$WHYSLOW_DB_CLUSTER_ID" --db /var/lib/whyslow/store.sqlite3
 ```
-
-`--dsn` and `--token` remain available for local testing, but environment
-variables keep secrets out of process arguments in production.
 
 Then, after (or during) an incident:
 
 ```bash
-whyslow --from 11:42 --to 11:47
-```
-
-Times accept ISO-8601 (`2026-07-30T23:55:00Z`), `HH:MM`,
-`HH:MM:SS`, or raw epoch seconds. Clock-only windows automatically roll
-across UTC midnight when `--to` is earlier than `--from`.
-
-## Root cause vs. blast radius — a real fix, not a hypothetical one
-
-Load-testing with 80 sessions genuinely blocked on the same row
-surfaced a real bug: `pg_blocking_pids()` returns the *entire
-transitive wait-queue chain*, not just "who's directly blocking me."
-80 blocked waiters produced **3,161** blocking edges — Postgres's
-row-lock queue chains each waiter behind the ones ahead of it, so
-`pg_blocking_pids()` for waiter N includes waiters 1..N-1 too, not
-just the true root holder. Storing that is an O(N^2) explosion, and
-`explain` would have reported dozens of different "blockers" during
-exactly the incidents where there's really only one root cause.
-
-The fix: only report an edge where the blocking session is not itself
-blocked by anyone (`cardinality(pg_blocking_pids(blocking.pid)) = 0`)
-— the one true root. This collapsed the same 80-waiter scenario from
-3,161 edges to **1**, correctly pointing at the actual root cause.
-
-That correctly fixes root-cause attribution, but it also means
-`blocking_edges` alone can no longer tell you *how many* sessions are
-actually stuck — only who's ultimately responsible. Blast radius is
-reported separately, from data that was already being collected
-anyway: every waiting session already shows up as `category = 'lock'`
-in the plain, cheap, no-join `SESSIONS_SQL` poll. `whyslow`
-and `whyslow diff` both surface this count alongside the root-cause
-edges, not instead of them. Two cheap, honest numbers instead of one
-expensive, misleading one.
-
-## Bugs found by repeated audits, not by guessing
-
-whyslow's design was shaped by bugs found running it against realistic
-conditions — an 80-waiter lock storm, a 900k-row window, a saturated Puma
-worker, an Aurora reader endpoint — not by guessing. The full round-by-round
-history lives in **[AUDIT_LOG.md](AUDIT_LOG.md)**; the four most transferable
-stories are written up as standalone posts in **[writing/](writing/)**.
-
-## Recording deploys and job markers
-
-```bash
-# one line at the end of your deploy pipeline
-whyslow event --source deploy --kind "v1.2.3 released" --payload "sha=$GIT_SHA"
-
-# or from a dbt/Airflow wrapper
-whyslow event --source dbt --kind "nightly_rollup started"
-```
-
-These appear on the timeline (`11:42:03  deploy event: v1.2.3 released`)
-**and** count as a correlation signal when they land close in time to
-the pressure -- within 60s, since a deploy or batch job can take a
-minute to manifest as database load.
-
-This closes a loop that was dangling: the `events` table was read and
-rendered from the very first version, but had **no writer at all** and
-never influenced any signal -- so the spec's own example output
-("Deployment detected") and its "overlaps a dbt run window" signal were
-both unreachable in practice. Found by grepping for callers of
-`write_event` and finding none.
-
-## Confidence is a ratio, and the denominators are real
-
-The two contributor categories have genuinely different numbers of
-checkable signals:
-
-| Category | Signals |
-|---|---|
-| blocking (4) | Puma backlog, host-tagged blocked sessions, maintenance query pattern, nearby event |
-| resource contention (5) | CPU spike, IO spike, CloudWatch CPU, Puma backlog, nearby event |
-
-Thresholds, stated in plain sight: `>=75%` High, `>=50%` Medium,
-anything above zero Low.
-
-This replaced a hardcoded `/3` that could produce literal **"4/3
-signals"** output once the IO signal was added -- nonsense, and
-corrosive to a tool whose entire pitch is that every number is
-inspectable. `tests/event_smoke.py` asserts signal counts can never
-exceed their denominator again.
-
-## `whyslow status` — is this thing actually collecting?
-
-The single most important command, because this tool can only explain
-incidents **from the moment collectors started running**. If a collector
-died three weeks ago, you do not want to discover that at 2am.
-
-```bash
-whyslow status
-whyslow doctor
-```
-
-`whyslow doctor` checks SQLite integrity, WAL mode, schema shape, private
-file permissions, free disk space, required collector health, and the
-configured Postgres, Puma, and CloudWatch dependencies. Live credentials
-come from `WHYSLOW_PG_DSN`, `WHYSLOW_PUMA_STATS_URL` /
-`WHYSLOW_PUMA_TOKEN`, and `WHYSLOW_DB_CLUSTER_ID`, so they stay out of
-process arguments and diagnostic output. Use `whyslow doctor --json` for
-automation.
-
-`explain`, `diff`, and `status` also support a stable, versioned JSON contract:
-
-```bash
-whyslow --last 15m --json > incident.json
-whyslow diff --last 15m --baseline-last 15m --json
-whyslow status --json
-```
-
-The JSON form preserves exact windows, coverage gaps, contributors, named
-signals, blocking remediation fields, and CloudWatch source-instance
-provenance without requiring automation to parse terminal prose. Set-like
-values are sorted and explicit-window reports are deterministic. Compatibility
-rules and field descriptions are documented in [JSON_OUTPUT.md](JSON_OUTPUT.md).
-
-Aurora mode requires IAM permissions for `rds:DescribeDBClusters` and
-`cloudwatch:GetMetricStatistics`. `whyslow doctor` resolves the current
-writer and fails its provenance check if the latest stored metrics still
-refer to a different instance. `--db-instance-id` remains available for
-standalone RDS, but deliberately warns that fixed-instance mode cannot follow
-Aurora failovers.
-
-CLI inputs fail closed: report windows are capped at 31 days, collector
-intervals must be finite and between 0 and 3600 seconds, Puma URLs cannot
-embed credentials or query-string tokens, identifiers are restricted to
-safe operational characters, and event fields have bounded sizes.
-
-The SQLite format has an explicit version with numbered transactional
-migrations. Older and unversioned stores upgrade in place; a store from a
-newer unsupported whyslow release is refused before journal, schema, or
-permission mutation. `whyslow doctor` reports current and expected versions.
-
-```
-Collectors
-  ✓ postgres                 alive  last heartbeat 1s ago  (interval=1.0s)
-  ✗ puma:web-3               STALE  last heartbeat 4.2d ago
-
-  WARNING: a stale collector means incidents during that gap
-  cannot be explained. Check the process is still running.
-
-Data coverage
-  session_changes            2841 rows   2026-07-26 09:00:00Z -> 2026-07-28 11:47:00Z  (50.8h)
-  blocking_edges               17 rows   2026-07-26 14:22:00Z -> 2026-07-28 11:44:00Z  (45.4h)
-```
-
-**Why heartbeats exist, rather than just counting rows:** collectors
-write *diffs*, so a healthy collector watching a quiet database writes
-**zero rows** — identical to a collector that died weeks ago. Row counts
-cannot distinguish those two states; heartbeats can. This was a real
-blind spot until it was found and fixed.
-
-Exits non-zero if any collector is stale, so it works as a monitoring
-check (cron, Nagios, a readiness probe), not just something read by eye.
-
-## Relative time windows
-
-Computing exact UTC timestamps by hand during an incident is real
-friction, so `--last` is supported everywhere a window is:
-
-```bash
 whyslow --last 15m
-whyslow diff --last 15m --baseline-last 15m   # baseline = the 15m just before
+whyslow status          # is everything actually collecting?
 ```
 
-`--from`/`--to` still work (always UTC — see the timezone fix below).
-
-## Deployment
-
-`deploy/` contains systemd units for Postgres and CloudWatch plus a
-templated Puma unit (`whyslow-collect-puma@web-3`). Run all of them on
-the same collector host. Every unit invokes the explicit production
-environment at `/opt/whyslow/venv/bin/whyslow`. Each Puma instance reads its target URL and
-token from `/etc/whyslow/puma/<host>.env`.
-
-Enable the independent retention and validated backup timers as well:
-
-```bash
-systemctl enable --now whyslow-prune.timer
-systemctl enable --now whyslow-backup.timer
-```
-
-This runs `whyslow prune` hourly, so expired data is removed even if the
-Postgres collector is unavailable. The backup timer creates a private,
-integrity-checked online snapshot daily and retains the seven newest copies;
-collectors do not need to stop. The collector units use
-`Restart=always` with `StartLimitIntervalSec=0` — a collector that gives
-up retrying is a collector that silently isn't there when it matters —
-and read credentials from an `EnvironmentFile` rather than command-line
-arguments, since a DSN passed as an argument is visible in `ps` output
-to every user on the box. SQL string/numeric literals and comments are
-removed before query evidence is stored, query text is capped at 2 KiB,
-and the SQLite file is created with mode `0600`.
-
-## Verified with a real Postgres instance
-
-This isn't a hand-waved design doc — `tests/live_blocking_smoke.py`
-opens two real concurrent transactions against a live Postgres 16
-instance, creating a genuine lock-wait, while the actual collector
-polls `pg_stat_activity` and `pg_blocking_pids()` concurrently. Real
-output from that run:
-
-```
-Observed contributors
-- postgres [blocking] -- Low confidence (1/4 signals)
-
-Evidence
-  postgres:
-    ✓ blocked sessions tagged to host(s): analytics_role_session
-```
-
-Correctly Low, not High — because that run had no Puma data and the
-query wasn't a maintenance pattern, so only 1 of 4 signals fired. It
-also captured `autovacuum launcher`, `checkpointer`, and `walwriter`
-automatically via `backend_type`, with no code written for any of
-them.
-
-`tests/synthetic_reindex_smoke.py` confirms the 75% threshold path —
-a REINDEX blocking a tagged host with a corroborating Puma backlog
-spike — correctly yields **High** confidence with three of four named
-signals and all three evidence lines present.
-
-`tests/load_bench.py` and `tests/blocking_load_bench.py` measure
-actual per-poll cost under load rather than assuming it: ~3-5ms
-average against a 1000ms budget at ~95 concurrent sessions, and
-~4-5ms average even with a real 80-session blocking chain, after the
-root-cause fix above. Not part of CI (slower, connection-hungry) —
-run manually against a local Postgres to reproduce.
+Production install (versioned wheel, checksum verification, systemd, rollback)
+is in **[INSTALL.md](INSTALL.md)**. Full setup, querying, events, and `diff`
+are in **[docs/usage.md](docs/usage.md)**.
 
 ## Honest limits
 
-- **Only reconstructs incidents from the moment collectors were
-  running.** Cannot retroactively explain anything from before
-  install — there is no way around this with a self-hosted collector;
-  it is not a limitation to be engineered away, it is what "your own
-  lightweight collector, no vendor lock-in" costs you.
+- **Only reconstructs incidents from the moment collectors were running.** It
+  cannot retroactively explain anything from before install — that is the cost
+  of a self-hosted collector with no vendor lock-in, not a bug to engineer away.
 - **1-second polling can miss sub-second blocking events.**
-- **Confidence is a named heuristic signal count, not a statistical
-  or causal guarantee.** Two unrelated things co-occurring can still
-  produce a Medium/High label — read the Evidence section, don't
-  just read the label.
-- **Query-text pattern matching for maintenance labels
-  (`REINDEX`/`VACUUM FULL`/`COPY`/`CREATE INDEX`) is best-effort
-  and cosmetic only** — it never gates detection, only readability.
-- **Sanitized query structure is still operational data.** Literal values
-  and comments are removed, but statement types and relation names remain
-  visible by design. Treat the mode-`0600` SQLite store as sensitive.
-- **CloudWatch collector is real code, but not tested against a live AWS account** (requires
-  AWS credentials this environment doesn't have). Everything else in
-  this README is demonstrated against a real running Postgres
-  instance, not simulated.
-- **Puma collector expects `activate_control_app` enabled and reachable
-  from the collector host.** Puma worker RSS is not collected because
-  the control-app stats do not expose it.
+- **Confidence is a named-signal count, not a statistical or causal
+  guarantee.** Two unrelated things co-occurring can still produce a
+  Medium/High label — read the Evidence section, not just the label.
+- **Sanitized query structure is still operational data.** Literal values and
+  comments are stripped, but statement types and relation names remain. Treat
+  the mode-`0600` SQLite store as sensitive.
+- **The CloudWatch collector is real code but not yet tested against a live AWS
+  account.** Everything else is demonstrated against a real running Postgres.
 
-## `whyslow diff` — a healthy baseline vs the incident window
+## Documentation
 
-```bash
-whyslow diff --baseline-from 11:30 --baseline-to 11:35 --from 11:42 --to 11:47
-```
-
-Deliberately narrower than `explain`: no signals, no confidence, no
-inferred cause — just counts and set differences (roles/apps/
-maintenance-query-patterns that appeared or disappeared, blocking edge
-count, max Puma backlog, max CloudWatch CPU). Safe to add without
-touching the causality question, because it never claims one.
-
-Verified in `tests/diff_smoke.py`: a quiet baseline vs. the REINDEX
-scenario correctly shows `analytics_role` and `reindex` as newly
-appeared and blocking edges going 0 -> 1.
-
-## Reliability, retention, and Puma coverage
-
-Operational gaps closed after repeated audits:
-
-- **Retention/pruning is implemented and tested** (`Store.prune()`,
-  `whyslow prune`, and `tests/prune_smoke.py`) — session/Puma data ages
-  out after 48h, blocking edges and CloudWatch metrics after 30 days.
-  The systemd timer runs independently of collector health.
-- **Heartbeat staleness uses each collector's configured interval.**
-  A collector intentionally running every 30 seconds no longer gets
-  judged against the one-second default; older stores retain safe
-  role-based fallbacks.
-- **The Postgres collector now reconnects with exponential backoff**
-  instead of dying if the connection drops mid-poll — plausible
-  exactly during a severe incident, which is the one moment this tool
-  cannot afford to go silent.
-- **A priming poll on every (re)start** establishes the "already seen"
-  baseline without writing it, so a restart no longer reports every
-  currently-active session as newly appeared.
-- **The Puma collector had zero test coverage before this pass.**
-  `tests/fake_puma.py` + `tests/puma_smoke.py` exercise both
-  single-mode and clustered-mode parsing against a real HTTP server
-  (no Ruby stack required). This also caught a real bug: clustered
-  mode was *summing* stats across workers, which hides a single
-  saturated worker among idle ones. Fixed to report the worst worker
-  (max backlog, min pool_capacity) instead — verified with a
-  synthetic case where summing and worst-worker aggregation disagree
-  (sum: backlog=25, pool_capacity=27 -- both wrong; worst-worker:
-  20 and 0 -- correct).
-- **Machine-readable output is a versioned interface, not a dump of internal
-  Python objects.** `tests/json_output_smoke.py` verifies the schema envelope,
-  deterministic ordering, exact windows, health verdict, default command
-  routing, and CloudWatch writer provenance.
-- **Dependency maintenance is automated.** Dependabot checks both Python and
-  GitHub Actions dependencies weekly, and CI actions use Node 24-compatible
-  releases.
-
-## Not yet built
-
-- Automatic dbt (`run_results.json`) / Airflow polling — `whyslow event`
-  covers this manually with one line in a job wrapper, which is simpler
-  and works for jobs of any kind; automatic parsing is only worth adding
-  if the manual call proves too easy to forget
-- A "recommend a fix" step once a pattern repeats — diagnosis only
-  for now
-- Anything resembling request-latency/APM instrumentation. Deliberately
-  out of scope — it pulls this back toward generic monitoring, which
-  is exactly the crowded, already-served space this tool exists to
-  avoid.
-- CloudWatch collection and Aurora writer failover are tested against a
-  mocked AWS account/client (`moto` plus an RDS API fake), but still not run
-  against a **real** AWS account -- the
-  remaining gap is smaller (auth/IAM/region edge cases in practice),
-  not the core query logic, which is now exercised end-to-end
+- **[RUNBOOK.md](RUNBOOK.md)** — what to type during an incident, and what each answer means
+- **[INSTALL.md](INSTALL.md)** — versioned production install, checksums, systemd, rollback
+- **[docs/usage.md](docs/usage.md)** — running collectors, querying, events, `diff`
+- **[docs/operations.md](docs/operations.md)** — `status`/`doctor`, deployment, reliability & retention
+- **[docs/design.md](docs/design.md)** — how it works, why no integrations, evidence, scope
+- **[JSON_OUTPUT.md](JSON_OUTPUT.md)** — the stable, versioned JSON contract
+- **[AUDIT_LOG.md](AUDIT_LOG.md)** — bugs found by repeated audits, round by round
+- **[writing/](writing/)** — the four most transferable findings, written up as standalone posts

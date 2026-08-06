@@ -205,8 +205,8 @@ how much worse the incident window was.
 ### Round: collector liveness, plus two resilience bugs found while adding it
 
 - **Silent collector death was undetectable.** Covered in the
-  [`whyslow status`](README.md#whyslow-status--is-this-thing-actually-collecting)
-  section of the README -- the core problem was that diff-based writes make
+  [`whyslow status`](docs/operations.md#whyslow-status--whyslow-doctor--is-this-thing-actually-collecting)
+  section of the operations docs -- the core problem was that diff-based writes make
   "healthy but quiet" and "dead three weeks ago" produce identical data
   (nothing at all). Heartbeats fix it; `tests/status_smoke.py` asserts
   all three states are correctly distinguished, including that a *stale*
