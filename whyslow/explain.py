@@ -379,7 +379,13 @@ def explain(store, start_ts, end_ts):
             if still_active:
                 held_seconds = end_ts - min(starts)
             else:
-                held_seconds = max(e for e in ends if e is not None) - min(starts)
+                # Not active at window end, but if no resolution time was ever
+                # recorded (collector down when it ended, all edges unresolved),
+                # fall back to the window end rather than raising on max() of an
+                # empty sequence -- we still know it was held at least this long.
+                resolved_ends = [e for e in ends if e is not None]
+                latest_end = max(resolved_ends) if resolved_ends else end_ts
+                held_seconds = latest_end - min(starts)
 
             contributors.append(
                 {

@@ -12,6 +12,12 @@ class FakeStore:
     def __init__(self, path):
         captured["db"] = path
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
 
 class FakePostgresCollector:
     def __init__(self, dsn, store, interval):

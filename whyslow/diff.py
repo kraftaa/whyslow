@@ -13,25 +13,26 @@ from .collector_postgres import label_query
 
 
 def summarize_window(store, start_ts, end_ts):
-    sessions = store.sessions_in(start_ts, end_ts)
+    # Sessions are aggregated in SQL rather than loaded row-by-row: on a wide
+    # window (e.g. diff --last 2d) the raw table can hold ~900k rows and OOM a
+    # small collector host. Counts come from per-minute/category buckets;
+    # roles/apps/labels come from the distinct dimensions -- both bounded by
+    # cardinality, not row count.
+    aggregated = store.sessions_aggregated_in(start_ts, end_ts)
+    role_values, app_values, query_values = store.session_dimensions_in(start_ts, end_ts)
     edges = store.blocking_edges_in(start_ts, end_ts)
     puma = store.puma_stats_in(start_ts, end_ts)
     cw = store.cloudwatch_metrics_in(start_ts, end_ts)
 
     category_counts = {}
-    roles = set()
-    apps = set()
-    maintenance_labels = set()
+    session_events = 0
+    for _minute_bucket, category, n, _first_ts, _last_ts in aggregated:
+        category_counts[category] = category_counts.get(category, 0) + n
+        session_events += n
 
-    for ts, pid, backend_type, usename, app, state, category, query in sessions:
-        category_counts[category] = category_counts.get(category, 0) + 1
-        if usename:
-            roles.add(usename)
-        if app:
-            apps.add(app)
-        label = label_query(query)
-        if label:
-            maintenance_labels.add(label)
+    roles = {r for r in role_values if r}
+    apps = {a for a in app_values if a}
+    maintenance_labels = {label for q in query_values if (label := label_query(q))}
 
     longest_block = None
     for row in edges:
@@ -64,7 +65,7 @@ def summarize_window(store, start_ts, end_ts):
     max_cpu = max(cpu_values, default=None)
 
     return {
-        "session_events": len(sessions),
+        "session_events": session_events,
         "category_counts": category_counts,
         "blocking_edges": len(edges),
         "longest_block_seconds": longest_block,

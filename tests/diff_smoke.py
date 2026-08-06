@@ -50,3 +50,33 @@ assert "analytics_role" in d["incident"]["roles"] and "analytics_role" not in d[
 assert "reindex" in d["incident"]["maintenance_labels"]
 assert d["baseline"]["blocking_edges"] == 0 and d["incident"]["blocking_edges"] == 1
 print("\nPASS: diff correctly shows analytics_role and reindex as newly appeared, blocking 0 -> 1")
+
+# --- regression: summarize_window must aggregate sessions in SQL, not load
+# every row. A wide window with many rows would OOM if diff still called the
+# raw sessions_in; assert both the counts and the distinct dimensions survive
+# aggregation, and that sessions_in is never invoked here. Isolated store so a
+# lingering unresolved edge from the scenario above doesn't leak roles in.
+shutil.rmtree("/tmp/whyslow_smoke3_agg", ignore_errors=True)
+agg_store = Store("/tmp/whyslow_smoke3_agg/store.sqlite3")
+agg_start = 1_000_000.0
+n_rows = 500
+for i in range(n_rows):
+    agg_store.write_sessions(
+        [(700 + i, "client backend", f"role_{i % 3}", f"host_{i % 4}", "active", "cpu", "REINDEX TABLE t")],
+        ts=agg_start + 1 + (i % 60),
+    )
+agg_end = agg_start + 120
+
+agg_store.sessions_in = lambda *a, **k: (_ for _ in ()).throw(  # type: ignore[assignment]
+    AssertionError("diff.summarize_window must not call the unbounded sessions_in")
+)
+summary = diff_mod.summarize_window(agg_store, agg_start, agg_end)
+assert summary["session_events"] == n_rows, summary["session_events"]
+assert summary["category_counts"] == {"cpu": n_rows}, summary["category_counts"]
+assert summary["roles"] == {"role_0", "role_1", "role_2"}, summary["roles"]
+assert summary["apps"] == {"host_0", "host_1", "host_2", "host_3"}, summary["apps"]
+assert summary["maintenance_labels"] == {"reindex"}, summary["maintenance_labels"]
+print(
+    f"PASS: summarize_window aggregates {n_rows} session rows in SQL "
+    "(counts, roles, apps, labels intact) without the unbounded row load"
+)

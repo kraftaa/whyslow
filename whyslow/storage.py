@@ -377,6 +377,41 @@ class Store:
             (start_ts, end_ts),
         ).fetchall()
 
+    def session_dimensions_in(self, start_ts, end_ts):
+        """Distinct roles, applications, and query texts in the window.
+
+        diff.py needs the *set* of roles/apps/maintenance-labels that appeared,
+        not every session row. Selecting DISTINCT bounds memory to the
+        cardinality of those dimensions rather than the row count, so a wide
+        `diff --last 2d` no longer materialises ~900k rows the way the raw
+        sessions_in call did (see sessions_aggregated_in for the OOM history).
+        """
+        roles = [
+            r[0]
+            for r in self.conn.execute(
+                "SELECT DISTINCT usename FROM session_changes "
+                "WHERE ts BETWEEN ? AND ? AND usename IS NOT NULL",
+                (start_ts, end_ts),
+            )
+        ]
+        apps = [
+            r[0]
+            for r in self.conn.execute(
+                "SELECT DISTINCT application_name FROM session_changes "
+                "WHERE ts BETWEEN ? AND ? AND application_name IS NOT NULL",
+                (start_ts, end_ts),
+            )
+        ]
+        queries = [
+            r[0]
+            for r in self.conn.execute(
+                "SELECT DISTINCT query FROM session_changes "
+                "WHERE ts BETWEEN ? AND ? AND query IS NOT NULL",
+                (start_ts, end_ts),
+            )
+        ]
+        return roles, apps, queries
+
     def top_session_queries_in(self, start_ts, end_ts, limit=5):
         """Most frequent queries in the window, for context. Bounded by
         `limit`, so it stays cheap on a wide window."""
@@ -689,6 +724,13 @@ class Store:
                 backup_conn.close()
             if temporary.exists():
                 temporary.unlink()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
 
     def close(self):
         self.conn.close()
