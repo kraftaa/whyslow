@@ -33,7 +33,7 @@ test = [
     "build>=1.2",
     "coverage==7.15.2",
     "moto[cloudwatch]>=5.2.2",
-    "twine>=6.0",
+    "twine>=7.0.0",
 ]
 quality = [
     "ruff==0.15.22",
