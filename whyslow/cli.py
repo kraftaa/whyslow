@@ -289,15 +289,25 @@ def cmd_benchmark(args):
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parent.parent
-    if (repo_root / "benchmark").is_dir() and str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    try:
-        from benchmark import cli as benchmark_cli
-    except ImportError as exc:
+    bench_dir = repo_root / "benchmark"
+    if not (bench_dir / "__init__.py").is_file():
         raise SystemExit(
-            "whyslow benchmark requires the source checkout; the 'benchmark' "
-            f"package is not importable here ({exc})"
+            "whyslow benchmark requires the source checkout; the repo 'benchmark/' "
+            "package was not found next to the installed whyslow package"
         )
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    import benchmark
+
+    # Guard against importing an unrelated top-level package also named
+    # 'benchmark' (e.g. one installed in site-packages).
+    if Path(benchmark.__file__).resolve().parent != bench_dir.resolve():
+        raise SystemExit(
+            "refusing to run: an unrelated 'benchmark' package "
+            f"({benchmark.__file__}) shadows the whyslow benchmark module"
+        )
+    from benchmark import cli as benchmark_cli
+
     raise SystemExit(benchmark_cli.run(args.action, args.scenario, json_output=args.json))
 
 

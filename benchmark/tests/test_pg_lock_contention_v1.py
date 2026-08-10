@@ -104,6 +104,20 @@ def main() -> int:
     assert good["score"] == 100, good
     print(f"PASS: known-good score {good['score']}/100, all checks green")
 
+    # 4b. redistribution that preserves the total sum must still fail integrity.
+    admin = common.connect(ctx.config.admin_dsn("test_redistribute"))
+    try:
+        with admin.cursor() as cur:
+            cur.execute("UPDATE accounts SET balance = balance + 10 WHERE id = 1")
+            cur.execute("UPDATE accounts SET balance = balance - 10 WHERE id = 2")
+    finally:
+        admin.close()
+    redistributed = scenario.evaluate(ctx)
+    assert redistributed["checks"]["data_integrity"] is False, redistributed["components"][
+        "data_integrity"
+    ]
+    print("PASS: balance redistribution (total preserved) is caught by integrity")
+
     # 5. destructive remediation is penalized (fresh incident).
     print("=== destructive remediation ===")
     scenario.reset(ctx)

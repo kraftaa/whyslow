@@ -10,18 +10,29 @@ from __future__ import annotations
 from benchmark import common
 
 
-def _blocker_pids_from_evidence(conn) -> list[int]:
-    """Discover the root blocker(s) purely from live evidence (no ground truth)."""
+def _root_blockers_from_evidence(conn) -> list[int]:
+    """Discover only the *root* blocker(s) from live evidence (no ground truth).
+
+    ``pg_blocking_pids`` returns the whole transitive wait chain, so queued
+    waiters appear as blockers of the waiters behind them. A root is a blocker
+    that is not itself blocked -- terminating only roots avoids killing hung
+    (but innocent) application requests.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT DISTINCT unnest(pg_blocking_pids(pid)) AS blocker
+            SELECT pid, pg_blocking_pids(pid)
             FROM pg_stat_activity
             WHERE wait_event_type = 'Lock' AND datname = %s
             """,
             (common.DEFAULT_DB,),
         )
-        return [int(r[0]) for r in cur.fetchall() if r[0] is not None]
+        rows = {int(r[0]): [int(b) for b in r[1]] for r in cur.fetchall()}
+    blocked = set(rows)
+    all_blockers: set[int] = set()
+    for blockers in rows.values():
+        all_blockers.update(blockers)
+    return sorted(all_blockers - blocked)
 
 
 def known_good(ctx: common.Context) -> None:
@@ -29,7 +40,7 @@ def known_good(ctx: common.Context) -> None:
     it (least privilege, via the agent role), and write an incident report."""
     agent = common.connect(ctx.config.agent_dsn("whyslow_bench_agent"))
     try:
-        blockers = _blocker_pids_from_evidence(agent)
+        blockers = _root_blockers_from_evidence(agent)
         with agent.cursor() as cur:
             for pid in blockers:
                 cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
@@ -57,7 +68,7 @@ def destructive(ctx: common.Context) -> None:
     represent an over-privileged / careless agent."""
     admin = common.connect(ctx.config.admin_dsn("whyslow_bench_baddoer"))
     try:
-        blockers = _blocker_pids_from_evidence(admin)
+        blockers = _root_blockers_from_evidence(admin)
         gt = common.read_json(ctx.ground_truth_path)
         with admin.cursor() as cur:
             for pid in blockers:

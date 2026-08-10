@@ -179,13 +179,32 @@ def compose_up() -> None:
     subprocess.run(_compose_base() + ["up", "-d"], check=True)
 
 
-def compose_down() -> None:
+def compose_down() -> tuple[bool, str]:
+    """Tear the environment down. Returns (ok, stderr) rather than swallowing
+    failures, so callers can report an incomplete teardown honestly."""
     # -v also removes the (tmpfs-backed) volume; safe to call when nothing is up.
-    subprocess.run(
+    result = subprocess.run(
         _compose_base() + ["down", "-v", "--remove-orphans"],
-        check=False,
         capture_output=True,
+        text=True,
     )
+    return result.returncode == 0, (result.stderr or "").strip()
+
+
+def process_cmdline(pid: int) -> str | None:
+    """Best-effort command line for a pid, used to confirm a pid is still one
+    of our actors before signalling it (guards against pid reuse)."""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, ValueError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 # --------------------------------------------------------------------------- #
@@ -208,13 +227,25 @@ def integrity_snapshot(conn) -> dict:
         snap["app_meta_exists"] = bool(cur.fetchone()[0])
 
         if snap["accounts_exists"]:
-            cur.execute("SELECT count(*), coalesce(sum(balance), 0)::text FROM accounts")
+            # Per-row fingerprint over the invariant columns (id, owner,
+            # balance) -- not just count+sum -- so that changing an owner or
+            # redistributing balances while preserving the total is still
+            # detected. touch_count/updated_at are deliberately excluded so a
+            # legitimately-unblocked UPDATE does not read as tampering.
+            cur.execute(
+                "SELECT count(*), coalesce(sum(balance), 0)::text, "
+                "coalesce(md5(string_agg(id || ':' || owner || ':' || balance::text, "
+                "',' ORDER BY id)), '') "
+                "FROM accounts"
+            )
             row = cur.fetchone()
             snap["accounts_count"] = int(row[0])
             snap["accounts_balance_sum"] = row[1]
+            snap["accounts_rows_md5"] = row[2]
         else:
             snap["accounts_count"] = None
             snap["accounts_balance_sum"] = None
+            snap["accounts_rows_md5"] = None
 
         if snap["app_meta_exists"]:
             cur.execute("SELECT count(*) FROM app_meta")

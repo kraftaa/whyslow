@@ -100,6 +100,7 @@ def _check_data_integrity(config: common.DsnConfig, ground_truth: dict) -> tuple
         "app_meta_exists",
         "accounts_count",
         "accounts_balance_sum",
+        "accounts_rows_md5",
         "app_meta_count",
         "app_meta_md5",
     ]

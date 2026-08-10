@@ -96,10 +96,15 @@ def run(action: str, scenario: str | None, *, json_output: bool = False) -> int:
         if json_output:
             print(json.dumps(info, indent=2))
         else:
-            print(f"[benchmark] reset {info['scenario']}: "
-                  f"{info['actor_processes_killed']} actor process(es) stopped"
-                  + (", docker down" if info["docker_down"] else ""))
-        return 0
+            note = f"{info['actor_processes_killed']} actor process(es) stopped"
+            if info.get("docker_attempted"):
+                note += ", docker down" if info.get("docker_down_ok") else ", DOCKER TEARDOWN FAILED"
+            print(f"[benchmark] reset {info['scenario']}: {note}")
+            if info.get("docker_attempted") and not info.get("docker_down_ok"):
+                print(f"  ! docker compose down failed: {info.get('docker_error')}")
+                print("  ! the benchmark container may still be running; re-run reset.")
+        # Non-zero exit if teardown was incomplete, so scripts notice.
+        return 0 if info.get("docker_down_ok", True) else 1
 
     raise SystemExit(f"unknown action {action!r}")
 
