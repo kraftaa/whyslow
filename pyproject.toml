@@ -14,9 +14,9 @@ Repository = "https://github.com/kraftaa/whyslow"
 Issues = "https://github.com/kraftaa/whyslow/issues"
 
 [project.optional-dependencies]
-cloudwatch = ["boto3>=1.43.61"]
+cloudwatch = ["boto3>=1.43.66"]
 test = [
-    "boto3>=1.43.61",
+    "boto3>=1.43.66",
     "build>=1.2",
     "coverage==7.15.2",
     "moto[cloudwatch]>=5.2.2",
