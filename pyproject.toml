@@ -18,7 +18,7 @@ cloudwatch = ["boto3>=1.43.61"]
 test = [
     "boto3>=1.43.61",
     "build>=1.2",
-    "coverage==7.15.2",
+    "coverage==7.15.4",
     "moto[cloudwatch]>=5.2.2",
     "twine>=6.0",
 ]
