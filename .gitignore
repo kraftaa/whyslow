@@ -23,3 +23,8 @@ dist/
 .vscode/
 
 description/
+idea_rl.md
+# whyslow benchmark: private evaluator state, agent workspace, and results
+benchmark/scenarios/*/.state/
+benchmark/scenarios/*/workspace/
+benchmark/results/*.json
