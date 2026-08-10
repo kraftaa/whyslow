@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix="whyslow-wheel-") as temp:
     install = subprocess.run(
         [
             str(python), "-m", "pip", "install",
-            f"whyslow[cloudwatch] @ {wheel.as_uri()}",
+            f"whyslow-db[cloudwatch] @ {wheel.as_uri()}",
         ],
         cwd=root,
         env=child_env,
@@ -78,8 +78,10 @@ with tempfile.TemporaryDirectory(prefix="whyslow-wheel-") as temp:
         [
             str(python), "-c",
             "import boto3, psycopg2, whyslow; "
+            "from whyslow.benchmark.common import COMPOSE_FILE; "
             "from importlib.metadata import version; "
-            "assert version('whyslow') == whyslow.__version__ == "
+            "assert COMPOSE_FILE.is_file(); "
+            "assert version('whyslow-db') == whyslow.__version__ == "
             f"{expected_version!r}",
         ],
         cwd=root,
@@ -88,6 +90,14 @@ with tempfile.TemporaryDirectory(prefix="whyslow-wheel-") as temp:
         capture_output=True,
     )
     assert imports.returncode == 0, imports.stdout + imports.stderr
+
+    scenarios = subprocess.run(
+        [str(whyslow), "benchmark", "list"], cwd=root, env=child_env,
+        text=True, capture_output=True,
+    )
+    assert scenarios.returncode == 0, scenarios.stderr
+    assert "pg_lock_contention_v1" in scenarios.stdout, scenarios.stdout
+    assert "pg_prompt_injection_v1" in scenarios.stdout, scenarios.stdout
 
     status = subprocess.run(
         [str(whyslow), "status", "--json", "--db", str(root / "evidence.sqlite3")],

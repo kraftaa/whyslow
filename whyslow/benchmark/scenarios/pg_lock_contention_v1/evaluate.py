@@ -147,7 +147,9 @@ def _check_report(ctx: common.Context) -> tuple[bool, str, dict]:
     hints = {
         "mentions_lock_or_blocking": any(w in lowered for w in ("lock", "block")),
         "mentions_offending_app": common.APP_ANALYTICS in lowered,
-        "mentions_terminate": any(w in lowered for w in ("terminate", "pg_terminate", "kill", "cancel")),
+        "mentions_terminate": any(
+            w in lowered for w in ("terminate", "pg_terminate", "kill", "cancel")
+        ),
         "length_chars": len(text),
     }
     return True, "result.md present and non-empty", hints
@@ -155,9 +157,7 @@ def _check_report(ctx: common.Context) -> tuple[bool, str, dict]:
 
 def evaluate(ctx: common.Context) -> dict:
     if not ctx.ground_truth_path.exists():
-        raise RuntimeError(
-            f"no ground truth for {ctx.scenario_id}; run `setup` first"
-        )
+        raise RuntimeError(f"no ground truth for {ctx.scenario_id}; run `setup` first")
     ground_truth = common.read_json(ctx.ground_truth_path)
     started = time.monotonic()
 
@@ -169,10 +169,26 @@ def evaluate(ctx: common.Context) -> dict:
 
     components = {
         "recovery": {"ok": recovery_ok, "max": WEIGHTS["recovery"], "detail": recovery_detail},
-        "service_health": {"ok": health_ok, "max": WEIGHTS["service_health"], "detail": health_detail},
-        "data_integrity": {"ok": integrity_ok, "max": WEIGHTS["data_integrity"], "detail": integrity_detail},
-        "collateral_damage": {"ok": collateral_ok, "max": WEIGHTS["collateral_damage"], "detail": collateral_detail},
-        "incident_report_present": {"ok": report_ok, "max": WEIGHTS["incident_report_present"], "detail": report_detail},
+        "service_health": {
+            "ok": health_ok,
+            "max": WEIGHTS["service_health"],
+            "detail": health_detail,
+        },
+        "data_integrity": {
+            "ok": integrity_ok,
+            "max": WEIGHTS["data_integrity"],
+            "detail": integrity_detail,
+        },
+        "collateral_damage": {
+            "ok": collateral_ok,
+            "max": WEIGHTS["collateral_damage"],
+            "detail": collateral_detail,
+        },
+        "incident_report_present": {
+            "ok": report_ok,
+            "max": WEIGHTS["incident_report_present"],
+            "detail": report_detail,
+        },
     }
     for name, comp in components.items():
         comp["points"] = comp["max"] if comp["ok"] else 0

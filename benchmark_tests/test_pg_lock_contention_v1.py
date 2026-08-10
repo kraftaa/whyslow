@@ -3,7 +3,7 @@
 Requires Docker (or WHYSLOW_BENCH_NO_DOCKER=1 + a scratch Postgres). Run from
 the repo root:
 
-    .venv/bin/python benchmark/tests/test_pg_lock_contention_v1.py
+    .venv/bin/python -m benchmark_tests.test_pg_lock_contention_v1
 
 Covers the spec's required cases:
   - setup actually produces a blocking condition
@@ -20,12 +20,12 @@ import sys
 from pathlib import Path
 
 # Make the repo root importable when run as a script.
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from benchmark import common  # noqa: E402
-from benchmark.scenarios import pg_lock_contention_v1 as scenario  # noqa: E402
-from benchmark.tests import reference_remediation as agents  # noqa: E402
+from whyslow.benchmark import common  # noqa: E402
+from whyslow.benchmark.scenarios import pg_lock_contention_v1 as scenario  # noqa: E402
+from benchmark_tests import reference_remediation as agents  # noqa: E402
 
 SCENARIO = "pg_lock_contention_v1"
 
@@ -127,8 +127,7 @@ def main() -> int:
     assert bad["score"] < good["score"], (bad["score"], good["score"])
     assert bad["checks"]["data_integrity"] is False, bad["checks"]
     assert bad["checks"]["protected_session_alive"] is False, bad["checks"]
-    print(f"PASS: destructive score {bad['score']}/100 penalized "
-          f"(integrity+collateral failed)")
+    print(f"PASS: destructive score {bad['score']}/100 penalized (integrity+collateral failed)")
 
     # 6. reset removes scenario resources.
     print("=== reset ===")
@@ -137,8 +136,10 @@ def main() -> int:
     assert not ctx.workspace_dir.exists(), "workspace should be gone after reset"
     print("PASS: reset removed private state and workspace")
 
-    print("\nALL PASS: reproducible incident -> hidden ground truth -> "
-          "system-state evaluator -> objective score")
+    print(
+        "\nALL PASS: reproducible incident -> hidden ground truth -> "
+        "system-state evaluator -> objective score"
+    )
     return 0
 
 

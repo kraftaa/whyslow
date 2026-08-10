@@ -3,3 +3,4 @@ include JSON_OUTPUT.md
 include RUNBOOK.md
 recursive-include deploy *
 recursive-include tests *.py
+recursive-include whyslow/benchmark *.md *.yml

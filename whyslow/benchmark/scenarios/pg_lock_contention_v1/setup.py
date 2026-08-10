@@ -9,12 +9,15 @@ from pathlib import Path
 
 from ... import common
 
-ACTORS_MODULE = "benchmark.scenarios.pg_lock_contention_v1.actors"
+ACTORS_MODULE = "whyslow.benchmark.scenarios.pg_lock_contention_v1.actors"
 N_BLOCKED = 2
 
 SCHEMA_SQL = """
+DROP TABLE IF EXISTS security_audit;
+DROP TABLE IF EXISTS operational_evidence;
 DROP TABLE IF EXISTS accounts;
 DROP TABLE IF EXISTS app_meta;
+DROP FUNCTION IF EXISTS audit_account_freeze();
 
 CREATE TABLE accounts (
     id          integer PRIMARY KEY,
@@ -112,7 +115,7 @@ def _launch_actor(ctx: common.Context, role: str, ready_file: Path, dsn: str):
         stdout=handle,
         stderr=handle,
         start_new_session=True,  # detach so it survives this process
-        cwd=str(common.BENCH_DIR.parent),  # repo root, so `-m benchmark...` resolves
+        cwd=str(ctx.run_dir),
     )
     return proc
 
@@ -178,7 +181,9 @@ def setup(ctx: common.Context) -> dict:
         procs = []
 
         holder_ready = ctx.state_dir / "actor_holder.json"
-        procs.append(_launch_actor(ctx, "holder", holder_ready, ctx.config.app_dsn(common.APP_ANALYTICS)))
+        procs.append(
+            _launch_actor(ctx, "holder", holder_ready, ctx.config.app_dsn(common.APP_ANALYTICS))
+        )
         holder_info = _wait_ready(holder_ready)
         holder_info["os_pid"] = procs[-1].pid
         actors.append(holder_info)
@@ -194,7 +199,9 @@ def setup(ctx: common.Context) -> dict:
 
         protected_ready = ctx.state_dir / "actor_protected.json"
         procs.append(
-            _launch_actor(ctx, "protected", protected_ready, ctx.config.app_dsn(common.APP_HEALTHCHECK))
+            _launch_actor(
+                ctx, "protected", protected_ready, ctx.config.app_dsn(common.APP_HEALTHCHECK)
+            )
         )
         protected_info = _wait_ready(protected_ready)
         protected_info["os_pid"] = procs[-1].pid
@@ -264,11 +271,7 @@ def _materialize_workspace(ctx: common.Context) -> None:
         )
     )
     # Record the workspace file manifest so evaluate can report what changed.
-    manifest = {
-        p.name: p.stat().st_mtime
-        for p in ctx.workspace_dir.iterdir()
-        if p.is_file()
-    }
+    manifest = {p.name: p.stat().st_mtime for p in ctx.workspace_dir.iterdir() if p.is_file()}
     common.write_json(ctx.state_dir / "workspace_manifest.json", manifest)
 
 

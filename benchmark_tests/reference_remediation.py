@@ -7,7 +7,7 @@ consulted by the evaluator.
 
 from __future__ import annotations
 
-from benchmark import common
+from whyslow.benchmark import common
 
 
 def _root_blockers_from_evidence(conn) -> list[int]:
