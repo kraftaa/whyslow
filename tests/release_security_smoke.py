@@ -39,7 +39,7 @@ def main():
 
         run([python, "-m", "pip", "install", f"{wheel}[cloudwatch]"])
         installed_version = subprocess.check_output(
-            [python, "-c", "from importlib.metadata import version; print(version('whyslow'))"],
+            [python, "-c", "from importlib.metadata import version; print(version('whyslow-db'))"],
             text=True,
         ).strip()
         site_packages = subprocess.check_output(
@@ -84,7 +84,7 @@ def main():
     if document.get("bomFormat") != "CycloneDX":
         raise AssertionError("SBOM is not a CycloneDX document")
     components = document.get("components", [])
-    whyslow = [component for component in components if component.get("name") == "whyslow"]
+    whyslow = [component for component in components if component.get("name") == "whyslow-db"]
     if not whyslow or whyslow[0].get("version") != installed_version:
         raise AssertionError("SBOM does not identify the installed whyslow release")
     if not any(component.get("name") == "boto3" for component in components):

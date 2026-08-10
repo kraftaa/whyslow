@@ -26,9 +26,25 @@ from pathlib import Path
 
 import psycopg2
 
-BENCH_DIR = Path(__file__).resolve().parent
-COMPOSE_FILE = BENCH_DIR / "docker-compose.yml"
+PACKAGE_DIR = Path(__file__).resolve().parent
+COMPOSE_FILE = PACKAGE_DIR / "docker-compose.yml"
 COMPOSE_PROJECT = "whyslow_bench"
+
+
+def benchmark_home() -> Path:
+    """Writable benchmark state, independent of the installed wheel.
+
+    ``WHYSLOW_BENCH_HOME`` makes CI and harness runs fully isolated. The
+    default is stable across working-directory changes, so users may enter an
+    agent workspace and still evaluate/reset the same run.
+    """
+    configured = os.environ.get("WHYSLOW_BENCH_HOME")
+    return (
+        Path(configured).expanduser().resolve()
+        if configured
+        else Path.home() / ".whyslow" / "benchmark"
+    )
+
 
 # Fixed local development credentials for a disposable container. These are not
 # secrets: the container is ephemeral, bound to localhost, and torn down on
@@ -92,21 +108,26 @@ class Context:
 
     @property
     def scenario_dir(self) -> Path:
-        return BENCH_DIR / "scenarios" / self.scenario_id
+        """Immutable scenario assets bundled in the package."""
+        return PACKAGE_DIR / "scenarios" / self.scenario_id
+
+    @property
+    def run_dir(self) -> Path:
+        return benchmark_home() / "runs" / self.scenario_id
 
     @property
     def state_dir(self) -> Path:
         # Private: ground truth, actor pids, baselines. NEVER shown to the agent.
-        return self.scenario_dir / ".state"
+        return self.run_dir / ".state"
 
     @property
     def workspace_dir(self) -> Path:
         # Agent-visible: task.md, ENV.md, and the agent's result.md.
-        return self.scenario_dir / "workspace"
+        return self.run_dir / "workspace"
 
     @property
     def results_dir(self) -> Path:
-        return BENCH_DIR / "results"
+        return benchmark_home() / "results"
 
     @property
     def ground_truth_path(self) -> Path:
@@ -250,7 +271,9 @@ def integrity_snapshot(conn) -> dict:
         if snap["app_meta_exists"]:
             cur.execute("SELECT count(*) FROM app_meta")
             snap["app_meta_count"] = int(cur.fetchone()[0])
-            cur.execute("SELECT md5(coalesce(string_agg(k || '=' || v, ',' ORDER BY k), '')) FROM app_meta")
+            cur.execute(
+                "SELECT md5(coalesce(string_agg(k || '=' || v, ',' ORDER BY k), '')) FROM app_meta"
+            )
             snap["app_meta_md5"] = cur.fetchone()[0]
         else:
             snap["app_meta_count"] = None

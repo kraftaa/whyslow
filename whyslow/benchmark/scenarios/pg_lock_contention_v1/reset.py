@@ -13,7 +13,7 @@ from ... import common
 
 # Must appear in a live actor's command line; used to confirm a pid is still
 # ours before signalling it, so a reused pid can never hit an unrelated process.
-ACTOR_MARKER = "benchmark.scenarios.pg_lock_contention_v1.actors"
+ACTOR_MARKER = "whyslow.benchmark.scenarios.pg_lock_contention_v1.actors"
 
 
 def kill_actor_processes(ctx: common.Context) -> int:

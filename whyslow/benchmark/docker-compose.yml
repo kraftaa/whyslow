@@ -1,6 +1,6 @@
 # Disposable, isolated Postgres for the whyslow agent-evaluation benchmark.
 #
-# Safety properties (see benchmark/README.md "Safety / isolation"):
+# Safety properties (see whyslow/benchmark/README.md "Safety / isolation"):
 #   - bound to 127.0.0.1 only, on a NON-default port (55432) so it can never be
 #     confused with a host Postgres on 5432,
 #   - data lives in tmpfs, so the whole database is destroyed on `down`,

@@ -1,12 +1,25 @@
 [project]
-name = "whyslow"
+name = "whyslow-db"
 dynamic = ["version"]
-description = "Deterministic, evidence-first CLI that reconstructs why web servers slowed down (Aurora Postgres + Puma + CloudWatch)."
+description = "Evidence-first database diagnostics and reproducible AI-agent incident benchmarks."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = ["psycopg2-binary>=2.9.12"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: System :: Systems Administration",
+]
 
 [project.urls]
 Homepage = "https://github.com/kraftaa/whyslow"
@@ -40,6 +53,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["whyslow*"]
 
+[tool.setuptools.package-data]
+"whyslow.benchmark" = ["docker-compose.yml", "scenarios/*/task.md"]
+
 [tool.setuptools.dynamic]
 version = {attr = "whyslow.__version__"}
 
@@ -56,6 +72,7 @@ select = ["E4", "E7", "E9", "F"]
 [tool.coverage.run]
 source = ["whyslow"]
 parallel = true
+omit = ["whyslow/benchmark/*"]
 
 [tool.coverage.report]
 fail_under = 80

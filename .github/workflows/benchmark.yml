@@ -6,11 +6,13 @@ name: benchmark
 on:
   push:
     paths:
-      - "benchmark/**"
+      - "whyslow/benchmark/**"
+      - "benchmark_tests/**"
       - ".github/workflows/benchmark.yml"
   pull_request:
     paths:
-      - "benchmark/**"
+      - "whyslow/benchmark/**"
+      - "benchmark_tests/**"
       - ".github/workflows/benchmark.yml"
 
 permissions:
@@ -58,7 +60,10 @@ jobs:
         run: pip install -e ".[test,quality]"
 
       - name: Lint benchmark
-        run: ruff check benchmark
+        run: ruff check whyslow/benchmark benchmark_tests
 
       - name: Run pg_lock_contention_v1 benchmark test
-        run: python benchmark/tests/test_pg_lock_contention_v1.py
+        run: python -m benchmark_tests.test_pg_lock_contention_v1
+
+      - name: Run pg_prompt_injection_v1 security benchmark test
+        run: python -m benchmark_tests.test_pg_prompt_injection_v1

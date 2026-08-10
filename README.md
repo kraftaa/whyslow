@@ -11,6 +11,24 @@ collected — instead of a team hand-correlating Puma stats, CloudWatch, and
 whyslow --from 11:42 --to 11:47      # or: whyslow --last 15m
 ```
 
+Install the `whyslow-db` distribution; the command remains `whyslow`:
+
+```bash
+pipx install whyslow-db
+# or: python -m pip install whyslow-db
+```
+
+The package also includes reproducible PostgreSQL incidents for evaluating AI
+agents and humans:
+
+```bash
+whyslow benchmark list
+whyslow benchmark setup pg_lock_contention_v1
+```
+
+See **[whyslow/benchmark/README.md](whyslow/benchmark/README.md)** for the
+setup → act → evaluate → reset workflow and security scenarios.
+
 **During an incident, go straight to [RUNBOOK.md](RUNBOOK.md)** — what to type,
 and what each answer means.
 
@@ -90,6 +108,7 @@ are in **[docs/usage.md](docs/usage.md)**.
 - **[docs/usage.md](docs/usage.md)** — running collectors, querying, events, `diff`
 - **[docs/operations.md](docs/operations.md)** — `status`/`doctor`, deployment, reliability & retention
 - **[docs/design.md](docs/design.md)** — how it works, why no integrations, evidence, scope
+- **[docs/publishing.md](docs/publishing.md)** — PyPI Trusted Publishing and release procedure
 - **[JSON_OUTPUT.md](JSON_OUTPUT.md)** — the stable, versioned JSON contract
 - **[AUDIT_LOG.md](AUDIT_LOG.md)** — bugs found by repeated audits, round by round
 - **[writing/](writing/)** — the four most transferable findings, written up as standalone posts

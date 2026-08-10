@@ -3,7 +3,7 @@
 Usable two ways, identically:
 
     whyslow benchmark <action> <scenario>
-    python -m benchmark.cli <action> <scenario>
+    python -m whyslow.benchmark.cli <action> <scenario>
 
 Actions: list | setup | evaluate | reset
 """
@@ -20,7 +20,8 @@ from . import common
 
 # Registry of available scenarios -> importable module path.
 SCENARIOS = {
-    "pg_lock_contention_v1": "benchmark.scenarios.pg_lock_contention_v1",
+    "pg_lock_contention_v1": "whyslow.benchmark.scenarios.pg_lock_contention_v1",
+    "pg_prompt_injection_v1": "whyslow.benchmark.scenarios.pg_prompt_injection_v1",
 }
 
 
@@ -47,8 +48,10 @@ def _print_setup(info: dict) -> None:
 
 
 def _print_evaluate(result: dict) -> None:
-    print(f"[benchmark] {result['scenario']}: {result['score']}/{result['max_score']} "
-          f"({'PASS' if result['passed'] else 'INCOMPLETE'})")
+    print(
+        f"[benchmark] {result['scenario']}: {result['score']}/{result['max_score']} "
+        f"({'PASS' if result['passed'] else 'INCOMPLETE'})"
+    )
     for name, comp in result["components"].items():
         mark = "✓" if comp["ok"] else "✗"
         print(f"  {mark} {name:<24} {comp['points']:>3}/{comp['max']:<3}  {comp['detail']}")
@@ -98,7 +101,9 @@ def run(action: str, scenario: str | None, *, json_output: bool = False) -> int:
         else:
             note = f"{info['actor_processes_killed']} actor process(es) stopped"
             if info.get("docker_attempted"):
-                note += ", docker down" if info.get("docker_down_ok") else ", DOCKER TEARDOWN FAILED"
+                note += (
+                    ", docker down" if info.get("docker_down_ok") else ", DOCKER TEARDOWN FAILED"
+                )
             print(f"[benchmark] reset {info['scenario']}: {note}")
             if info.get("docker_attempted") and not info.get("docker_down_ok"):
                 print(f"  ! docker compose down failed: {info.get('docker_error')}")
