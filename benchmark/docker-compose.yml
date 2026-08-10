@@ -1,0 +1,30 @@
+# Disposable, isolated Postgres for the whyslow agent-evaluation benchmark.
+#
+# Safety properties (see benchmark/README.md "Safety / isolation"):
+#   - bound to 127.0.0.1 only, on a NON-default port (55432) so it can never be
+#     confused with a host Postgres on 5432,
+#   - data lives in tmpfs, so the whole database is destroyed on `down`,
+#   - no host filesystem mounts, no docker socket, no host credentials.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: whyslow_admin
+      POSTGRES_PASSWORD: benchlocal
+      POSTGRES_DB: whyslow_bench
+      # Keep the incident realistic: never auto-kill the idle-in-transaction
+      # holder that creates the lock contention.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command: >-
+      postgres -c idle_in_transaction_session_timeout=0
+               -c log_lock_waits=on
+               -c deadlock_timeout=1s
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U whyslow_admin -d whyslow_bench"]
+      interval: 2s
+      timeout: 3s
+      retries: 40

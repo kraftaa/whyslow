@@ -1,0 +1,64 @@
+name: benchmark
+
+# The benchmark is isolated from the core `test` workflow (it needs a Postgres
+# and drives detached sessions). This job exercises it against a service
+# Postgres using the no-Docker path, so the benchmark test actually runs in CI.
+on:
+  push:
+    paths:
+      - "benchmark/**"
+      - ".github/workflows/benchmark.yml"
+  pull_request:
+    paths:
+      - "benchmark/**"
+      - ".github/workflows/benchmark.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scenario:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Match benchmark/common.py defaults so no-Docker mode connects cleanly.
+          POSTGRES_USER: whyslow_admin
+          POSTGRES_PASSWORD: benchlocal
+          POSTGRES_DB: whyslow_bench
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U whyslow_admin -d whyslow_bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Use the service Postgres instead of spinning our own container.
+      WHYSLOW_BENCH_NO_DOCKER: "1"
+      WHYSLOW_BENCH_HOST: "127.0.0.1"
+      WHYSLOW_BENCH_PORT: "5432"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -e ".[test,quality]"
+
+      - name: Lint benchmark
+        run: ruff check benchmark
+
+      - name: Run pg_lock_contention_v1 benchmark test
+        run: python benchmark/tests/test_pg_lock_contention_v1.py

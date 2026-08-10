@@ -282,6 +282,35 @@ def cmd_doctor(args):
         sys.exit(1)
 
 
+def cmd_benchmark(args):
+    # The benchmark is a dev/evaluation tool that ships only in the source
+    # checkout (it is not part of the installed wheel). Locate it next to the
+    # whyslow package and import lazily; fail clearly when run from a wheel.
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    bench_dir = repo_root / "benchmark"
+    if not (bench_dir / "__init__.py").is_file():
+        raise SystemExit(
+            "whyslow benchmark requires the source checkout; the repo 'benchmark/' "
+            "package was not found next to the installed whyslow package"
+        )
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    import benchmark
+
+    # Guard against importing an unrelated top-level package also named
+    # 'benchmark' (e.g. one installed in site-packages).
+    if Path(benchmark.__file__).resolve().parent != bench_dir.resolve():
+        raise SystemExit(
+            "refusing to run: an unrelated 'benchmark' package "
+            f"({benchmark.__file__}) shadows the whyslow benchmark module"
+        )
+    from benchmark import cli as benchmark_cli
+
+    raise SystemExit(benchmark_cli.run(args.action, args.scenario, json_output=args.json))
+
+
 def cmd_diff(args):
     incident_start, incident_end = resolve_window(args)
     if args.baseline_last:
@@ -492,6 +521,15 @@ def main(argv=None):
     p.add_argument("--at", help="timestamp (ISO-8601, HH:MM UTC, or epoch); defaults to now")
     p.add_argument("--db", default=".whyslow/store.sqlite3")
     p.set_defaults(func=cmd_event)
+
+    p = sub.add_parser(
+        "benchmark",
+        help="agent-evaluation benchmark on a disposable Postgres incident (source checkout only)",
+    )
+    p.add_argument("action", choices=["list", "setup", "evaluate", "reset"])
+    p.add_argument("scenario", nargs="?", help="scenario id, e.g. pg_lock_contention_v1")
+    p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    p.set_defaults(func=cmd_benchmark)
 
     # `explain` is the default action, so the primary command reads as
     # `whyslow --last 15m` rather than `whyslow explain --last 15m`.
