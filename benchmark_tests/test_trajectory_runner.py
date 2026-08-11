@@ -10,7 +10,14 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-from whyslow.benchmark.codex_timeline import snapshot_sessions, write_codex_timeline
+from whyslow.benchmark.agent_timeline import (
+    GENERIC_EVENTS_FILENAME,
+    snapshot_claude_sessions,
+    snapshot_sessions,
+    write_agent_timeline,
+    write_claude_timeline,
+    write_codex_timeline,
+)
 from whyslow.benchmark.runner import EventWriter, capture_command
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -167,6 +174,191 @@ def _test_codex_command_timeline() -> None:
         assert "must never be copied" not in jsonl, jsonl
 
 
+def _test_claude_command_timeline() -> None:
+    with tempfile.TemporaryDirectory(prefix="whyslow-claude-timeline-") as temporary:
+        root = Path(temporary)
+        workspace = root / "workspace"
+        bundle = root / "bundle"
+        workspace.mkdir()
+        bundle.mkdir()
+        environment = os.environ.copy()
+        environment["CLAUDE_CONFIG_DIR"] = str(root / "claude-home")
+        before = snapshot_claude_sessions(environment)
+
+        now = datetime.now(timezone.utc)
+        started_at = (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+        ended_at = (now + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+        timestamp = now.isoformat().replace("+00:00", "Z")
+        session = (
+            Path(environment["CLAUDE_CONFIG_DIR"]) / "projects" / "benchmark" / "session-test.jsonl"
+        )
+        session.parent.mkdir(parents=True)
+        records = [
+            {
+                "type": "assistant",
+                "timestamp": timestamp,
+                "sessionId": "claude-session-test",
+                "cwd": str(workspace),
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "thinking", "thinking": "must never be copied"}],
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": timestamp,
+                "sessionId": "claude-session-test",
+                "cwd": str(workspace),
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tool-1",
+                            "name": "Bash",
+                            "input": {
+                                "command": 'psql -c "SELECT 1"',
+                                "description": "Inspect database",
+                            },
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "timestamp": timestamp,
+                "sessionId": "claude-session-test",
+                "cwd": str(workspace),
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-1",
+                            "content": "SELECT 1",
+                            "is_error": False,
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": timestamp,
+                "sessionId": "claude-session-test",
+                "cwd": str(workspace),
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tool-2",
+                            "name": "Write",
+                            "input": {"file_path": "result.md", "content": "# Fixed"},
+                        }
+                    ],
+                },
+            },
+        ]
+        session.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+        result = write_claude_timeline(
+            bundle_dir=bundle,
+            cwd=workspace,
+            environment=environment,
+            sessions_before=before,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+        assert result["captured"] is True, result
+        assert result["tool_calls"] == 2, result
+        timeline = (bundle / "timeline.md").read_text()
+        assert "Agent: `claude`" in timeline, timeline
+        assert 'psql -c "SELECT 1"' in timeline, timeline
+        assert "result.md" in timeline, timeline
+        assert "must never be copied" not in timeline, timeline
+        assert "must never be copied" not in (bundle / "timeline.jsonl").read_text()
+
+
+def _test_generic_command_timeline() -> None:
+    with tempfile.TemporaryDirectory(prefix="whyslow-generic-timeline-") as temporary:
+        root = Path(temporary)
+        workspace = root / "workspace"
+        bundle = root / "bundle"
+        workspace.mkdir()
+        bundle.mkdir()
+        environment = os.environ.copy()
+        environment["WHYSLOW_BENCH_TIMELINE_PATH"] = str(bundle / GENERIC_EVENTS_FILENAME)
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        events = [
+            {
+                "timestamp": timestamp,
+                "type": "tool_call",
+                "call_id": "generic-1",
+                "tool": "shell",
+                "kind": "command",
+                "command": "psql -c 'SELECT 1'",
+                "cwd": str(workspace),
+            },
+            {
+                "timestamp": timestamp,
+                "type": "tool_result",
+                "call_id": "generic-1",
+                "summary": "completed",
+                "output": "1",
+            },
+            {
+                "timestamp": timestamp,
+                "type": "reasoning",
+                "content": "must never be copied",
+            },
+        ]
+        Path(environment["WHYSLOW_BENCH_TIMELINE_PATH"]).write_text(
+            "".join(json.dumps(event) + "\n" for event in events)
+        )
+        result = write_agent_timeline(
+            command=["other-agent"],
+            bundle_dir=bundle,
+            cwd=workspace,
+            environment=environment,
+            source_snapshot={"provider": None, "sessions": {}},
+            started_at=timestamp,
+            ended_at=timestamp,
+        )
+        assert result["captured"] is True, result
+        assert result["adapter"] == "generic-jsonl", result
+        timeline = (bundle / "timeline.md").read_text()
+        assert "psql -c 'SELECT 1'" in timeline, timeline
+        assert "must never be copied" not in timeline, timeline
+
+
+def _test_generic_protocol_through_runner() -> None:
+    with tempfile.TemporaryDirectory(prefix="whyslow-generic-runner-") as temporary:
+        bundle = Path(temporary)
+        events = EventWriter(bundle / "events.jsonl")
+        script = (
+            "import datetime,json,os,pathlib; "
+            "event={'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat(),"
+            "'type':'tool_call','call_id':'call-1','tool':'shell','kind':'command',"
+            "'command':'psql -c SELECT_1','cwd':os.getcwd()}; "
+            "pathlib.Path(os.environ['WHYSLOW_BENCH_TIMELINE_PATH']).write_text("
+            "json.dumps(event)+'\\n')"
+        )
+        try:
+            result = capture_command(
+                [sys.executable, "-c", script],
+                cwd=bundle,
+                bundle_dir=bundle,
+                events=events,
+                timeout=5,
+                environment=os.environ.copy(),
+            )
+        finally:
+            events.close()
+        assert result["command_timeline"]["captured"] is True, result
+        assert result["command_timeline"]["adapter"] == "generic-jsonl", result
+        assert "psql -c SELECT_1" in (bundle / "timeline.md").read_text()
+
+
 def _assert_bundle(bundle: Path, scenario: str) -> None:
     required = {
         "metadata.json",
@@ -255,6 +447,9 @@ def main() -> int:
     _test_timeout()
     _test_background_child_cannot_hold_capture_open()
     _test_codex_command_timeline()
+    _test_claude_command_timeline()
+    _test_generic_command_timeline()
+    _test_generic_protocol_through_runner()
     _test_full_runs()
     print("PASS: all scenario trajectories capture, evaluate, time out, and reset")
     return 0

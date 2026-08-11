@@ -1,8 +1,9 @@
-"""Extract observable Codex tool activity into a portable trajectory timeline.
+"""Extract observable agent tool activity into a portable trajectory timeline.
 
-Codex keeps a structured local JSONL session in ``$CODEX_HOME/sessions``.  This
-adapter reads only tool calls and their observable outputs.  It deliberately
-ignores messages and reasoning records.
+Built-in adapters understand Codex and Claude Code local JSONL sessions. A
+provider-neutral JSONL protocol lets any other harness emit the same events.
+Adapters read only tool calls and observable outputs; messages, model thinking,
+and private reasoning are deliberately ignored.
 """
 
 from __future__ import annotations
@@ -16,11 +17,19 @@ from typing import Any
 
 TIMELINE_SCHEMA_VERSION = "whyslow-command-timeline/1"
 MAX_RESULT_BYTES = 64 * 1024
+GENERIC_EVENTS_FILENAME = "agent-events.jsonl"
 
 
-def is_codex_command(command: list[str]) -> bool:
-    """Return whether the responder command directly launches Codex."""
-    return bool(command) and Path(command[0]).name.lower() in {"codex", "codex.exe"}
+def agent_provider(command: list[str]) -> str | None:
+    """Return the built-in structured-session provider for a command."""
+    if not command:
+        return None
+    executable = Path(command[0]).name.lower()
+    if executable in {"codex", "codex.exe"}:
+        return "codex"
+    if executable in {"claude", "claude.exe", "claude-code", "claude-code.exe"}:
+        return "claude"
+    return None
 
 
 def _codex_sessions_dir(environment: dict[str, str]) -> Path:
@@ -52,6 +61,44 @@ def changed_sessions(
 ) -> list[Path]:
     after = snapshot_sessions(environment)
     return sorted(path for path, state in after.items() if before.get(path) != state)
+
+
+def _claude_projects_dir(environment: dict[str, str]) -> Path:
+    configured = environment.get("CLAUDE_CONFIG_DIR")
+    root = Path(configured).expanduser() if configured else Path.home() / ".claude"
+    return root / "projects"
+
+
+def snapshot_claude_sessions(environment: dict[str, str]) -> dict[Path, tuple[int, int]]:
+    root = _claude_projects_dir(environment)
+    if not root.is_dir():
+        return {}
+    result: dict[Path, tuple[int, int]] = {}
+    for path in root.rglob("*.jsonl"):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        result[path] = (stat.st_size, stat.st_mtime_ns)
+    return result
+
+
+def changed_claude_sessions(
+    environment: dict[str, str], before: dict[Path, tuple[int, int]]
+) -> list[Path]:
+    after = snapshot_claude_sessions(environment)
+    return sorted(path for path, state in after.items() if before.get(path) != state)
+
+
+def snapshot_agent_sources(command: list[str], environment: dict[str, str]) -> dict:
+    provider = agent_provider(command)
+    if provider == "codex":
+        sessions = snapshot_sessions(environment)
+    elif provider == "claude":
+        sessions = snapshot_claude_sessions(environment)
+    else:
+        sessions = {}
+    return {"provider": provider, "sessions": sessions}
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -263,8 +310,146 @@ def extract_timeline(
     return timeline
 
 
-def _markdown(timeline: list[dict], session_id: str | None) -> str:
-    lines = ["# Agent command timeline", "", f"Codex session: `{session_id or 'unknown'}`", ""]
+def _claude_tool_details(name: str, tool_input: Any, cwd: str | None) -> dict:
+    arguments = tool_input if isinstance(tool_input, dict) else {}
+    if name == "Bash":
+        return {
+            "kind": "command",
+            "command": arguments.get("command", ""),
+            "cwd": cwd,
+            "description": arguments.get("description"),
+        }
+    if name in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
+        path = arguments.get("file_path", arguments.get("notebook_path"))
+        return {
+            "kind": "file_edit",
+            "files": [path] if path else [],
+            "arguments": arguments,
+        }
+    return {"kind": "tool", "arguments": arguments}
+
+
+def _claude_result_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content[:MAX_RESULT_BYTES]
+    if isinstance(content, list):
+        pieces = []
+        for item in content:
+            if isinstance(item, str):
+                pieces.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                pieces.append(item["text"])
+        return "".join(pieces)[:MAX_RESULT_BYTES]
+    return json.dumps(content, sort_keys=True)[:MAX_RESULT_BYTES]
+
+
+def extract_claude_timeline(
+    records: list[dict], *, started_at: str, ended_at: str, cwd: Path
+) -> list[dict]:
+    """Convert Claude Code records into reasoning-free timeline events."""
+    start = _parse_timestamp(started_at)
+    end = _parse_timestamp(ended_at)
+    timeline = []
+    for record in records:
+        timestamp = _parse_timestamp(record.get("timestamp"))
+        if timestamp is None or (start and timestamp < start) or (end and timestamp > end):
+            continue
+        record_cwd = record.get("cwd")
+        if isinstance(record_cwd, str):
+            try:
+                if Path(record_cwd).resolve() != cwd.resolve():
+                    continue
+            except OSError:
+                if Path(record_cwd) != cwd:
+                    continue
+        message = record.get("message")
+        if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+            continue
+        for content in message["content"]:
+            if not isinstance(content, dict):
+                continue
+            if content.get("type") == "tool_use":
+                name = str(content.get("name", "unknown"))
+                event = {
+                    "schema_version": TIMELINE_SCHEMA_VERSION,
+                    "sequence": len(timeline) + 1,
+                    "timestamp": record["timestamp"],
+                    "type": "tool_call",
+                    "agent": "claude",
+                    "session_id": record.get("sessionId"),
+                    "call_id": content.get("id"),
+                    "tool": name,
+                }
+                event.update(_claude_tool_details(name, content.get("input"), record_cwd))
+                timeline.append(event)
+            elif content.get("type") == "tool_result":
+                text = _claude_result_text(content.get("content", ""))
+                summary = text.splitlines()[0] if text else "No textual output"
+                timeline.append(
+                    {
+                        "schema_version": TIMELINE_SCHEMA_VERSION,
+                        "sequence": len(timeline) + 1,
+                        "timestamp": record["timestamp"],
+                        "type": "tool_result",
+                        "agent": "claude",
+                        "session_id": record.get("sessionId"),
+                        "call_id": content.get("tool_use_id"),
+                        "summary": summary,
+                        "output": text,
+                        "is_error": bool(content.get("is_error", False)),
+                        "output_truncated": len(text) >= MAX_RESULT_BYTES,
+                    }
+                )
+    timeline.sort(key=lambda event: (event["timestamp"], event["sequence"]))
+    for sequence, event in enumerate(timeline, 1):
+        event["sequence"] = sequence
+    return timeline
+
+
+def _generic_timeline(path: Path, agent: str) -> list[dict]:
+    """Validate provider-neutral events emitted directly by an agent harness."""
+    timeline = []
+    for record in _read_jsonl(path):
+        if record.get("type") not in {"tool_call", "tool_result"}:
+            continue
+        event = {
+            key: value
+            for key, value in record.items()
+            if key
+            in {
+                "timestamp",
+                "type",
+                "call_id",
+                "tool",
+                "kind",
+                "command",
+                "cwd",
+                "approval",
+                "description",
+                "files",
+                "arguments",
+                "summary",
+                "output",
+                "is_error",
+            }
+        }
+        if not isinstance(event.get("timestamp"), str):
+            continue
+        event["schema_version"] = TIMELINE_SCHEMA_VERSION
+        event["sequence"] = len(timeline) + 1
+        event["agent"] = str(record.get("agent") or agent)
+        if isinstance(event.get("output"), str):
+            output = event["output"][:MAX_RESULT_BYTES]
+            event["output"] = output
+            event["output_truncated"] = len(output) >= MAX_RESULT_BYTES
+        timeline.append(event)
+    return timeline
+
+
+def _markdown(timeline: list[dict], agent: str, session_ids: list[str]) -> str:
+    lines = ["# Agent command timeline", "", f"Agent: `{agent}`", ""]
+    if session_ids:
+        lines.extend(["Session(s): " + ", ".join(f"`{value}`" for value in session_ids), ""])
     call_number = 0
     for event in timeline:
         timestamp = event["timestamp"]
@@ -272,7 +457,7 @@ def _markdown(timeline: list[dict], session_id: str | None) -> str:
             call_number += 1
             kind = event.get("kind")
             tool = event.get("tool", "unknown")
-            lines.extend([f"## {call_number}. {timestamp} — {kind or tool}", ""])
+            lines.extend([f"## {call_number}. {timestamp} — {tool} ({kind or 'tool'})", ""])
             if kind == "command":
                 if event.get("cwd"):
                     lines.extend([f"Working directory: `{event['cwd']}`", ""])
@@ -297,8 +482,23 @@ def _markdown(timeline: list[dict], session_id: str | None) -> str:
                         ["```json", json.dumps(arguments, indent=2, sort_keys=True), "```", ""]
                     )
         else:
-            lines.extend([f"Result: {event.get('summary', 'completed')}", ""])
+            status = "error" if event.get("is_error") else "result"
+            lines.extend([f"{status.title()}: {event.get('summary', 'completed')}", ""])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _write_timeline_artifacts(bundle_dir: Path, timeline: list[dict]) -> None:
+    jsonl_path = bundle_dir / "timeline.jsonl"
+    with jsonl_path.open("w", encoding="utf-8") as handle:
+        for event in timeline:
+            handle.write(json.dumps(event, sort_keys=True) + "\n")
+    agents = sorted({str(event.get("agent", "unknown")) for event in timeline})
+    session_ids = sorted(
+        {str(event["session_id"]) for event in timeline if event.get("session_id")}
+    )
+    (bundle_dir / "timeline.md").write_text(
+        _markdown(timeline, ", ".join(agents), session_ids), encoding="utf-8"
+    )
 
 
 def write_codex_timeline(
@@ -324,11 +524,7 @@ def write_codex_timeline(
     if not timeline:
         return {"captured": False, "reason": "matching Codex session had no tool events"}
 
-    jsonl_path = bundle_dir / "timeline.jsonl"
-    with jsonl_path.open("w", encoding="utf-8") as handle:
-        for event in timeline:
-            handle.write(json.dumps(event, sort_keys=True) + "\n")
-    (bundle_dir / "timeline.md").write_text(_markdown(timeline, session_id), encoding="utf-8")
+    _write_timeline_artifacts(bundle_dir, timeline)
     return {
         "captured": True,
         "adapter": "codex-local-session",
@@ -338,4 +534,90 @@ def write_codex_timeline(
         "tool_calls": sum(event["type"] == "tool_call" for event in timeline),
         "jsonl": "timeline.jsonl",
         "markdown": "timeline.md",
+    }
+
+
+def write_claude_timeline(
+    *,
+    bundle_dir: Path,
+    cwd: Path,
+    environment: dict[str, str],
+    sessions_before: dict[Path, tuple[int, int]],
+    started_at: str,
+    ended_at: str,
+) -> dict:
+    paths = changed_claude_sessions(environment, sessions_before)
+    records = [record for path in paths for record in _read_jsonl(path)]
+    timeline = extract_claude_timeline(records, started_at=started_at, ended_at=ended_at, cwd=cwd)
+    if not timeline:
+        return {"captured": False, "reason": "no matching Claude tool events found"}
+    _write_timeline_artifacts(bundle_dir, timeline)
+    session_ids = sorted(
+        {str(event["session_id"]) for event in timeline if event.get("session_id")}
+    )
+    return {
+        "captured": True,
+        "adapter": "claude-local-session",
+        "session_ids": session_ids,
+        "sources": [str(path) for path in paths],
+        "events": len(timeline),
+        "tool_calls": sum(event["type"] == "tool_call" for event in timeline),
+        "jsonl": "timeline.jsonl",
+        "markdown": "timeline.md",
+    }
+
+
+def write_agent_timeline(
+    *,
+    command: list[str],
+    bundle_dir: Path,
+    cwd: Path,
+    environment: dict[str, str],
+    source_snapshot: dict,
+    started_at: str,
+    ended_at: str,
+) -> dict:
+    """Write the best structured timeline available for any responder."""
+    generic_path = Path(
+        environment.get("WHYSLOW_BENCH_TIMELINE_PATH", bundle_dir / GENERIC_EVENTS_FILENAME)
+    )
+    generic = _generic_timeline(generic_path, Path(command[0]).name if command else "unknown")
+    if generic:
+        _write_timeline_artifacts(bundle_dir, generic)
+        return {
+            "captured": True,
+            "adapter": "generic-jsonl",
+            "events": len(generic),
+            "tool_calls": sum(event["type"] == "tool_call" for event in generic),
+            "source": GENERIC_EVENTS_FILENAME,
+            "jsonl": "timeline.jsonl",
+            "markdown": "timeline.md",
+        }
+
+    provider = source_snapshot.get("provider")
+    sessions = source_snapshot.get("sessions", {})
+    if provider == "codex":
+        return write_codex_timeline(
+            bundle_dir=bundle_dir,
+            cwd=cwd,
+            environment=environment,
+            sessions_before=sessions,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+    if provider == "claude":
+        return write_claude_timeline(
+            bundle_dir=bundle_dir,
+            cwd=cwd,
+            environment=environment,
+            sessions_before=sessions,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+    return {
+        "captured": False,
+        "reason": (
+            "agent emitted no generic timeline events and has no built-in "
+            "structured-session adapter"
+        ),
     }
