@@ -152,6 +152,23 @@ def _test_codex_command_timeline() -> None:
                     "summary": [{"text": "must never be copied"}],
                 },
             },
+            {
+                "timestamp": timestamp,
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 100,
+                            "cached_input_tokens": 60,
+                            "output_tokens": 20,
+                            "reasoning_output_tokens": 5,
+                            "total_tokens": 120,
+                        },
+                        "model_context_window": 200000,
+                    },
+                },
+            },
         ]
         session.write_text("".join(json.dumps(record) + "\n" for record in records))
 
@@ -165,6 +182,8 @@ def _test_codex_command_timeline() -> None:
         )
         assert result["captured"] is True, result
         assert result["tool_calls"] == 2, result
+        assert result["usage"]["total_tokens"] == 60, result
+        assert result["usage"]["total_tokens_with_cache"] == 120, result
         timeline = (bundle / "timeline.md").read_text()
         assert 'psql -c "SELECT 1"' in timeline, timeline
         assert "Approval requested: Inspect the disposable database" in timeline, timeline
@@ -198,9 +217,17 @@ def _test_claude_command_timeline() -> None:
                 "type": "assistant",
                 "timestamp": timestamp,
                 "sessionId": "claude-session-test",
+                "requestId": "request-1",
                 "cwd": str(workspace),
                 "message": {
                     "role": "assistant",
+                    "model": "claude-test",
+                    "usage": {
+                        "input_tokens": 10,
+                        "cache_creation_input_tokens": 20,
+                        "cache_read_input_tokens": 30,
+                        "output_tokens": 40,
+                    },
                     "content": [{"type": "thinking", "thinking": "must never be copied"}],
                 },
             },
@@ -271,6 +298,9 @@ def _test_claude_command_timeline() -> None:
         )
         assert result["captured"] is True, result
         assert result["tool_calls"] == 2, result
+        assert result["usage"]["total_tokens"] == 50, result
+        assert result["usage"]["total_tokens_with_cache"] == 100, result
+        assert result["usage"]["models"] == ["claude-test"], result
         timeline = (bundle / "timeline.md").read_text()
         assert "Agent: `claude`" in timeline, timeline
         assert 'psql -c "SELECT 1"' in timeline, timeline
@@ -311,6 +341,14 @@ def _test_generic_command_timeline() -> None:
                 "type": "reasoning",
                 "content": "must never be copied",
             },
+            {
+                "timestamp": timestamp,
+                "type": "usage",
+                "provider": "other-agent",
+                "input_tokens": 50,
+                "output_tokens": 10,
+                "total_tokens": 60,
+            },
         ]
         Path(environment["WHYSLOW_BENCH_TIMELINE_PATH"]).write_text(
             "".join(json.dumps(event) + "\n" for event in events)
@@ -326,6 +364,7 @@ def _test_generic_command_timeline() -> None:
         )
         assert result["captured"] is True, result
         assert result["adapter"] == "generic-jsonl", result
+        assert result["usage"]["total_tokens"] == 60, result
         timeline = (bundle / "timeline.md").read_text()
         assert "psql -c 'SELECT 1'" in timeline, timeline
         assert "must never be copied" not in timeline, timeline
@@ -368,18 +407,21 @@ def _assert_bundle(bundle: Path, scenario: str) -> None:
         "workspace-after.json",
         "workspace.patch",
         "evaluation.json",
+        "trajectory-evaluation.json",
         "result.md",
     }
     assert required <= {path.name for path in bundle.iterdir()}, list(bundle.iterdir())
 
     metadata = json.loads((bundle / "metadata.json").read_text())
     evaluation = json.loads((bundle / "evaluation.json").read_text())
+    trajectory = json.loads((bundle / "trajectory-evaluation.json").read_text())
     assert metadata["schema_version"] == "whyslow-trajectory/1", metadata
     assert metadata["scenario"] == scenario, metadata
     assert metadata["agent"]["exit_code"] == 0, metadata
     assert metadata["agent"]["timed_out"] is False, metadata
     assert metadata["reset_after"] is True, metadata
     assert evaluation["score"] == 100 and evaluation["passed"], evaluation
+    assert trajectory["available"] is False, trajectory
     assert "result.md" in (bundle / "workspace.patch").read_text()
     assert f"remediated {scenario} safely" in (bundle / "terminal.log").read_text()
 
@@ -396,6 +438,7 @@ def _assert_bundle(bundle: Path, scenario: str) -> None:
         "agent_finished",
         "workspace_captured",
         "evaluation_finished",
+        "trajectory_evaluation_finished",
         "reset_finished",
     ):
         assert expected in event_types, (scenario, expected, event_types)

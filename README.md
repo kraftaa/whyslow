@@ -29,7 +29,8 @@ whyslow benchmark setup pg_lock_contention_v1
 Version 0.3.0 includes five scenarios covering lock contention, missing
 indexes, connection exhaustion, prompt injection, and synthetic-secret
 exposure. Version 0.3.1 adds readable, provider-neutral command timelines to
-trajectory bundles, with built-in Codex and Claude Code adapters.
+trajectory bundles, with built-in Codex and Claude Code adapters. Version 0.4.0
+adds deterministic trajectory-quality scoring and provider token telemetry.
 
 Run an agent under structured trajectory capture:
 
@@ -43,6 +44,9 @@ single timestamped bundle. Codex and Claude Code runs also include readable and
 machine-readable tool timelines showing commands, outcomes, and file edits
 without copying private reasoning. Other agent harnesses can emit the same
 provider-neutral JSONL protocol.
+
+Every structured run now produces two independent scores: whether the system
+was repaired correctly, and how safely and efficiently the agent got there.
 
 See **[whyslow/benchmark/README.md](whyslow/benchmark/README.md)** for the
 setup → act → evaluate → reset workflow and security scenarios.

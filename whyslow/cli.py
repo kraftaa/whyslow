@@ -511,10 +511,20 @@ def main(argv=None):
     p = sub.add_parser(
         "benchmark",
         help="agent-evaluation benchmark on disposable PostgreSQL incidents",
-        epilog="run syntax: whyslow benchmark run SCENARIO [options] -- COMMAND [ARG ...]",
+        epilog=(
+            "run: whyslow benchmark run SCENARIO [options] -- COMMAND [ARG ...]; "
+            "rescore: whyslow benchmark score-trajectory BUNDLE"
+        ),
     )
-    p.add_argument("action", choices=["list", "setup", "evaluate", "reset", "run"])
-    p.add_argument("scenario", nargs="?", help="scenario id, e.g. pg_lock_contention_v1")
+    p.add_argument(
+        "action",
+        choices=["list", "setup", "evaluate", "reset", "run", "score-trajectory"],
+    )
+    p.add_argument(
+        "scenario",
+        nargs="?",
+        help="scenario id, or a bundle path for score-trajectory",
+    )
     p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     p.add_argument("--timeout", type=float, default=600.0, help="run timeout in seconds")
     p.add_argument(

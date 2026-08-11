@@ -501,6 +501,135 @@ def _write_timeline_artifacts(bundle_dir: Path, timeline: list[dict]) -> None:
     )
 
 
+def _token_delta(final: dict, baseline: dict) -> dict:
+    fields = (
+        "input_tokens",
+        "cached_input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "total_tokens",
+    )
+    result = {}
+    for field in fields:
+        value = final.get(field)
+        if isinstance(value, (int, float)):
+            result[field] = max(0, int(value) - int(baseline.get(field, 0) or 0))
+    return result
+
+
+def _codex_usage(records: list[dict], started_at: str, ended_at: str) -> dict:
+    start = _parse_timestamp(started_at)
+    end = _parse_timestamp(ended_at)
+    baseline: dict = {}
+    final: dict = {}
+    context_window = None
+    for record in records:
+        if record.get("type") != "event_msg" or not isinstance(record.get("payload"), dict):
+            continue
+        payload = record["payload"]
+        if payload.get("type") != "token_count" or not isinstance(payload.get("info"), dict):
+            continue
+        timestamp = _parse_timestamp(record.get("timestamp"))
+        total = payload["info"].get("total_token_usage")
+        if timestamp is None or not isinstance(total, dict):
+            continue
+        if start is not None and timestamp < start:
+            baseline = total
+            continue
+        if end is None or timestamp <= end:
+            final = total
+            context_window = payload["info"].get("model_context_window")
+    if not final:
+        return {"available": False, "provider": "codex"}
+    tokens = _token_delta(final, baseline)
+    reported_input = tokens.get("input_tokens", 0)
+    cached_input = tokens.get("cached_input_tokens", 0)
+    output = tokens.get("output_tokens", 0)
+    tokens["input_tokens"] = max(0, reported_input - cached_input)
+    tokens["total_tokens"] = tokens["input_tokens"] + output
+    tokens["total_tokens_with_cache"] = reported_input + output
+    return {
+        "available": True,
+        "provider": "codex",
+        **tokens,
+        "model_context_window": context_window,
+    }
+
+
+def _claude_usage(records: list[dict], started_at: str, ended_at: str, cwd: Path) -> dict:
+    start = _parse_timestamp(started_at)
+    end = _parse_timestamp(ended_at)
+    requests: dict[str, dict] = {}
+    models = set()
+    for record in records:
+        timestamp = _parse_timestamp(record.get("timestamp"))
+        if timestamp is None or (start and timestamp < start) or (end and timestamp > end):
+            continue
+        record_cwd = record.get("cwd")
+        if isinstance(record_cwd, str):
+            try:
+                if Path(record_cwd).resolve() != cwd.resolve():
+                    continue
+            except OSError:
+                if Path(record_cwd) != cwd:
+                    continue
+        message = record.get("message")
+        if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+            continue
+        request_id = str(record.get("requestId") or record.get("uuid") or len(requests))
+        requests[request_id] = message["usage"]
+        if message.get("model"):
+            models.add(str(message["model"]))
+    if not requests:
+        return {"available": False, "provider": "claude"}
+    totals: dict[str, int] = {}
+    for usage in requests.values():
+        for field in (
+            "input_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+            "output_tokens",
+        ):
+            value = usage.get(field)
+            if isinstance(value, (int, float)):
+                totals[field] = totals.get(field, 0) + int(value)
+    totals["cached_input_tokens"] = totals.get("cache_creation_input_tokens", 0) + totals.get(
+        "cache_read_input_tokens", 0
+    )
+    totals["total_tokens"] = totals.get("input_tokens", 0) + totals.get("output_tokens", 0)
+    totals["total_tokens_with_cache"] = totals["total_tokens"] + totals["cached_input_tokens"]
+    return {
+        "available": True,
+        "provider": "claude",
+        **totals,
+        "models": sorted(models),
+        "requests": len(requests),
+    }
+
+
+def _generic_usage(path: Path, agent: str) -> dict:
+    for record in reversed(_read_jsonl(path)):
+        if record.get("type") != "usage":
+            continue
+        result = {"available": True, "provider": str(record.get("provider") or agent)}
+        for field in (
+            "input_tokens",
+            "cached_input_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+            "total_tokens",
+            "total_tokens_with_cache",
+        ):
+            if isinstance(record.get(field), (int, float)):
+                result[field] = int(record[field])
+        return result
+    return {"available": False, "provider": agent}
+
+
 def write_codex_timeline(
     *,
     bundle_dir: Path,
@@ -532,6 +661,7 @@ def write_codex_timeline(
         "source": str(source),
         "events": len(timeline),
         "tool_calls": sum(event["type"] == "tool_call" for event in timeline),
+        "usage": _codex_usage(records, started_at, ended_at),
         "jsonl": "timeline.jsonl",
         "markdown": "timeline.md",
     }
@@ -562,6 +692,7 @@ def write_claude_timeline(
         "sources": [str(path) for path in paths],
         "events": len(timeline),
         "tool_calls": sum(event["type"] == "tool_call" for event in timeline),
+        "usage": _claude_usage(records, started_at, ended_at, cwd),
         "jsonl": "timeline.jsonl",
         "markdown": "timeline.md",
     }
@@ -584,12 +715,14 @@ def write_agent_timeline(
     generic = _generic_timeline(generic_path, Path(command[0]).name if command else "unknown")
     if generic:
         _write_timeline_artifacts(bundle_dir, generic)
+        agent_name = Path(command[0]).name if command else "unknown"
         return {
             "captured": True,
             "adapter": "generic-jsonl",
             "events": len(generic),
             "tool_calls": sum(event["type"] == "tool_call" for event in generic),
             "source": GENERIC_EVENTS_FILENAME,
+            "usage": _generic_usage(generic_path, agent_name),
             "jsonl": "timeline.jsonl",
             "markdown": "timeline.md",
         }
