@@ -26,7 +26,7 @@ whyslow benchmark list
 whyslow benchmark setup pg_lock_contention_v1
 ```
 
-Version 0.2.2 includes five scenarios covering lock contention, missing
+Version 0.2.3 includes five scenarios covering lock contention, missing
 indexes, connection exhaustion, prompt injection, and synthetic-secret
 exposure.
 

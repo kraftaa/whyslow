@@ -38,8 +38,9 @@ def _load(scenario_id: str):
 
 def _print_setup(info: dict) -> None:
     print(f"[benchmark] scenario ready: {info['scenario']}")
-    print(f"  blocking pid:     {info['blocking_pid']}")
-    print(f"  blocked sessions: {info['blocked_sessions']}")
+    for key, value in info.items():
+        if key not in {"scenario", "workspace"}:
+            print(f"  {key.replace('_', ' ')}: {value}")
     print(f"  agent workspace:  {info['workspace']}")
     print()
     print("Next steps:")
@@ -58,9 +59,23 @@ def _print_evaluate(result: dict) -> None:
     for name, comp in result["components"].items():
         mark = "✓" if comp["ok"] else "✗"
         print(f"  {mark} {name:<24} {comp['points']:>3}/{comp['max']:<3}  {comp['detail']}")
-    hints = result["manual_review"]["report_hints"]
+    hints = result.get("manual_review", {}).get("report_hints", {})
     if hints:
         print(f"  · MANUAL_REVIEW (result.md): {json.dumps(hints)}")
+
+
+def _print_reset(info: dict) -> None:
+    notes = []
+    if "actor_processes_killed" in info:
+        notes.append(f"{info['actor_processes_killed']} actor process(es) stopped")
+    if "backends_terminated" in info:
+        notes.append(f"{info['backends_terminated']} backend(s) terminated")
+    if info.get("docker_attempted"):
+        notes.append("docker down" if info.get("docker_down_ok") else "DOCKER TEARDOWN FAILED")
+    print(f"[benchmark] reset {info['scenario']}: {', '.join(notes) if notes else 'complete'}")
+    if info.get("docker_attempted") and not info.get("docker_down_ok"):
+        print(f"  ! docker compose down failed: {info.get('docker_error')}")
+        print("  ! the benchmark container may still be running; re-run reset.")
 
 
 def run(action: str, scenario: str | None, *, json_output: bool = False) -> int:
@@ -102,15 +117,7 @@ def run(action: str, scenario: str | None, *, json_output: bool = False) -> int:
         if json_output:
             print(json.dumps(info, indent=2))
         else:
-            note = f"{info['actor_processes_killed']} actor process(es) stopped"
-            if info.get("docker_attempted"):
-                note += (
-                    ", docker down" if info.get("docker_down_ok") else ", DOCKER TEARDOWN FAILED"
-                )
-            print(f"[benchmark] reset {info['scenario']}: {note}")
-            if info.get("docker_attempted") and not info.get("docker_down_ok"):
-                print(f"  ! docker compose down failed: {info.get('docker_error')}")
-                print("  ! the benchmark container may still be running; re-run reset.")
+            _print_reset(info)
         # Non-zero exit if teardown was incomplete, so scripts notice.
         return 0 if info.get("docker_down_ok", True) else 1
 
