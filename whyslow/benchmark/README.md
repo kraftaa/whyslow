@@ -102,6 +102,64 @@ whyslow benchmark evaluate pg_lock_contention_v1 --json   # machine-readable
 whyslow benchmark reset pg_lock_contention_v1
 ```
 
+## Structured trajectory runner
+
+Use `run` when you want a reproducible record of how the responder behaved,
+not only its final score:
+
+```bash
+whyslow benchmark run pg_missing_index_v1 --timeout 600 -- codex
+# or
+whyslow benchmark run pg_missing_index_v1 --timeout 600 -- claude
+```
+
+Everything after `--` is the responder command and its arguments. The runner:
+
+1. sets up a fresh scenario,
+2. launches the command inside the agent workspace under a PTY when interactive,
+3. provides the least-privilege PostgreSQL connection through `PG*` environment variables,
+4. enforces the wall-clock timeout,
+5. captures observable behavior and workspace changes,
+6. evaluates the final system state, and
+7. writes one trajectory bundle.
+
+Add `--reset-after` to destroy the disposable database after evaluation:
+
+```bash
+whyslow benchmark run pg_missing_index_v1 \
+  --timeout 600 --reset-after -- codex
+```
+
+Without `--reset-after`, the environment remains available for inspection and
+can be removed normally:
+
+```bash
+whyslow benchmark reset pg_missing_index_v1
+```
+
+Bundles are stored under:
+
+```text
+~/.whyslow/benchmark/trajectories/<scenario>/<run-id>/
+├── metadata.json
+├── events.jsonl
+├── terminal.log
+├── postgres.log
+├── workspace-before.json
+├── workspace-after.json
+├── workspace.patch
+├── result.md
+└── evaluation.json
+```
+
+`events.jsonl` uses the `whyslow-trajectory/1` schema and records lifecycle,
+terminal input/output, timeout, evaluation, and reset events. `postgres.log` is
+available in the default Docker mode; service-Postgres/no-Docker runs record
+that server-log capture was unavailable.
+
+The bundle can contain operational SQL, terminal input, and synthetic secrets
+that an unsafe agent exposed. Treat it as sensitive test evidence.
+
 ### Running a *different* coding agent against the same environment
 
 The environment is just a Postgres instance plus a workspace directory. Any
@@ -153,18 +211,19 @@ judge the report.
 
 ## Trajectory / observability
 
-Captured cheaply and independently of the agent (no coupling to any harness):
+The runner captures observable behavior independently of the chosen agent:
 
-- scenario session activity in `pg_stat_activity` before (setup) and after
-  (evaluate),
-- baseline vs. current database integrity,
-- which workspace files were added/modified,
-- evaluate duration.
+- timestamped terminal input and output,
+- agent command, exit code, timeout, and duration,
+- PostgreSQL connections and SQL statements in Docker mode,
+- workspace manifests and a bounded text patch,
+- scenario activity before and after remediation,
+- deterministic evaluation details and `result.md`.
 
-Command-level shell tracing is intentionally **out of scope** for this MVP: a
-reliable, agent-independent implementation (e.g. an audited PostgreSQL log
-sink, or a `script(1)` wrapper) is future work rather than a brittle hook into
-one specific agent.
+It cannot capture private model reasoning or tool calls that an agent does not
+emit to its terminal. It also does not yet provide hard filesystem or network
+isolation; the disposable database and least-privilege role remain the primary
+safety boundaries.
 
 ## Safety / isolation
 
@@ -200,7 +259,9 @@ is penalized, and reset removes resources. Requires Docker (or
   evidence boundaries. This is still a focused regression pack, not a broad
   industry benchmark.
 - `result.md` correctness is manual-review only.
-- No command-level tracing (see above).
+- Generic terminal events are captured, but agent-specific semantic tool-call
+  adapters are not yet included.
+- A timeout is enforced; command-count, token, cost, and network limits are not.
 - Requires Docker for the default disposable environment.
 - Runs in a dedicated PostgreSQL-backed CI workflow, isolated from the core
   diagnostic test matrix.

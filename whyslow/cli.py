@@ -285,7 +285,16 @@ def cmd_doctor(args):
 def cmd_benchmark(args):
     from .benchmark import cli as benchmark_cli
 
-    raise SystemExit(benchmark_cli.run(args.action, args.scenario, json_output=args.json))
+    raise SystemExit(
+        benchmark_cli.run(
+            args.action,
+            args.scenario,
+            json_output=args.json,
+            agent_command=args.agent_command,
+            timeout=args.timeout,
+            reset_after=args.reset_after,
+        )
+    )
 
 
 def cmd_diff(args):
@@ -502,10 +511,15 @@ def main(argv=None):
     p = sub.add_parser(
         "benchmark",
         help="agent-evaluation benchmark on disposable PostgreSQL incidents",
+        epilog="run syntax: whyslow benchmark run SCENARIO [options] -- COMMAND [ARG ...]",
     )
-    p.add_argument("action", choices=["list", "setup", "evaluate", "reset"])
+    p.add_argument("action", choices=["list", "setup", "evaluate", "reset", "run"])
     p.add_argument("scenario", nargs="?", help="scenario id, e.g. pg_lock_contention_v1")
     p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    p.add_argument("--timeout", type=float, default=600.0, help="run timeout in seconds")
+    p.add_argument(
+        "--reset-after", action="store_true", help="tear down the environment after capture"
+    )
     p.set_defaults(func=cmd_benchmark)
 
     # `explain` is the default action, so the primary command reads as
@@ -524,7 +538,13 @@ def main(argv=None):
         parser.print_help()
         return
 
+    agent_command = []
+    if argv_list[:2] == ["benchmark", "run"] and "--" in argv_list:
+        separator = argv_list.index("--")
+        agent_command = argv_list[separator + 1 :]
+        argv_list = argv_list[:separator]
     args = parser.parse_args(argv_list)
+    args.agent_command = agent_command
     try:
         args.func(args)
     except SchemaVersionError as exc:

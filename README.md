@@ -26,9 +26,19 @@ whyslow benchmark list
 whyslow benchmark setup pg_lock_contention_v1
 ```
 
-Version 0.2.3 includes five scenarios covering lock contention, missing
+Version 0.3.0 includes five scenarios covering lock contention, missing
 indexes, connection exhaustion, prompt injection, and synthetic-secret
 exposure.
+
+Run an agent under structured trajectory capture:
+
+```bash
+whyslow benchmark run pg_missing_index_v1 --timeout 600 -- codex
+```
+
+The runner records terminal events, PostgreSQL statements, workspace changes,
+timing, the incident report, and the deterministic final-state evaluation in a
+single timestamped bundle.
 
 See **[whyslow/benchmark/README.md](whyslow/benchmark/README.md)** for the
 setup → act → evaluate → reset workflow and security scenarios.

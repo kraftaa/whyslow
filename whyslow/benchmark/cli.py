@@ -5,7 +5,7 @@ Usable two ways, identically:
     whyslow benchmark <action> <scenario>
     python -m whyslow.benchmark.cli <action> <scenario>
 
-Actions: list | setup | evaluate | reset
+Actions: list | setup | evaluate | reset | run
 """
 
 from __future__ import annotations
@@ -78,7 +78,15 @@ def _print_reset(info: dict) -> None:
         print("  ! the benchmark container may still be running; re-run reset.")
 
 
-def run(action: str, scenario: str | None, *, json_output: bool = False) -> int:
+def run(
+    action: str,
+    scenario: str | None,
+    *,
+    json_output: bool = False,
+    agent_command: list[str] | None = None,
+    timeout: float = 600.0,
+    reset_after: bool = False,
+) -> int:
     if action == "list":
         for sid in sorted(SCENARIOS):
             meta = _load(sid).METADATA
@@ -90,6 +98,31 @@ def run(action: str, scenario: str | None, *, json_output: bool = False) -> int:
 
     module = _load(scenario)
     ctx = common.Context(scenario_id=scenario)
+
+    if action == "run":
+        if not agent_command:
+            raise SystemExit("run requires an agent command after `--`, e.g. `-- codex`")
+        from .runner import run_trajectory
+
+        summary = run_trajectory(
+            module,
+            ctx,
+            agent_command,
+            timeout=timeout,
+            reset_after=reset_after,
+        )
+        if json_output:
+            print(json.dumps(summary, indent=2))
+        else:
+            print()
+            _print_evaluate(summary["evaluation"])
+            print(f"  → trajectory bundle: {summary['bundle']}")
+            if reset_after:
+                print("  → disposable environment reset")
+            else:
+                print(f"  → inspect or continue in {ctx.workspace_dir}")
+                print(f"  → reset with: whyslow benchmark reset {scenario}")
+        return summary["exit_code"]
 
     if action == "setup":
         info = module.setup(ctx)
@@ -125,12 +158,33 @@ def run(action: str, scenario: str | None, *, json_output: bool = False) -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="benchmark", description=__doc__)
-    parser.add_argument("action", choices=["list", "setup", "evaluate", "reset"])
+    parser = argparse.ArgumentParser(
+        prog="benchmark",
+        description=__doc__,
+        epilog="run syntax: benchmark run SCENARIO [options] -- COMMAND [ARG ...]",
+    )
+    parser.add_argument("action", choices=["list", "setup", "evaluate", "reset", "run"])
     parser.add_argument("scenario", nargs="?", help="scenario id, e.g. pg_lock_contention_v1")
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
-    args = parser.parse_args(argv)
-    return run(args.action, args.scenario, json_output=args.json)
+    parser.add_argument("--timeout", type=float, default=600.0, help="run timeout in seconds")
+    parser.add_argument(
+        "--reset-after", action="store_true", help="tear down the environment after capture"
+    )
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    command = []
+    if argv_list[:1] == ["run"] and "--" in argv_list:
+        separator = argv_list.index("--")
+        command = argv_list[separator + 1 :]
+        argv_list = argv_list[:separator]
+    args = parser.parse_args(argv_list)
+    return run(
+        args.action,
+        args.scenario,
+        json_output=args.json,
+        agent_command=command,
+        timeout=args.timeout,
+        reset_after=args.reset_after,
+    )
 
 
 if __name__ == "__main__":
