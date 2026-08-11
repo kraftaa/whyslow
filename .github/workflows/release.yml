@@ -43,22 +43,29 @@ jobs:
 
       - name: Build and validate distributions
         run: |
-          python -m build
-          python -m twine check dist/*
-          python tests/wheel_install_smoke.py dist/*.whl
+          python -m build --outdir pypi-dist
+          python -m twine check pypi-dist/*
+          python tests/wheel_install_smoke.py pypi-dist/*.whl
 
       - name: Audit release dependencies and create SBOM
-        run: python tests/release_security_smoke.py dist/*.whl dist/
+        run: python tests/release_security_smoke.py pypi-dist/*.whl release-artifacts/
 
       - name: Create checksums
         run: |
-          cd dist
-          sha256sum *.whl *.tar.gz *.cdx.json > SHA256SUMS
+          {
+            (cd pypi-dist && sha256sum *.whl *.tar.gz)
+            (cd release-artifacts && sha256sum *.cdx.json)
+          } > release-artifacts/SHA256SUMS
 
       - name: Publish distributions to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: pypi-dist/
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          pypi-dist/*.whl pypi-dist/*.tar.gz release-artifacts/*
+          --verify-tag --generate-notes

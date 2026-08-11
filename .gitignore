@@ -12,6 +12,8 @@ venv/
 
 build/
 dist/
+pypi-dist/
+release-artifacts/
 
 *.sqlite
 *.sqlite3
