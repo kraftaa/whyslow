@@ -62,6 +62,9 @@ jobs:
       - name: Lint benchmark
         run: ruff check whyslow/benchmark benchmark_tests
 
+      - name: Run scenario-agnostic CLI output regression test
+        run: python -m benchmark_tests.test_cli_output
+
       - name: Run pg_lock_contention_v1 benchmark test
         run: python -m benchmark_tests.test_pg_lock_contention_v1
 

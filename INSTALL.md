@@ -9,10 +9,10 @@ For a normal CLI installation, use `pipx install whyslow-db`. For a versioned
 production deployment, download the release assets and verify their checksums:
 
 ```bash
-gh release download v0.2.2 --repo kraftaa/whyslow --dir /tmp/whyslow-v0.2.2
-cd /tmp/whyslow-v0.2.2
+gh release download v0.2.3 --repo kraftaa/whyslow --dir /tmp/whyslow-v0.2.3
+cd /tmp/whyslow-v0.2.3
 sha256sum --check SHA256SUMS
-tar -xzf whyslow_db-0.2.2.tar.gz
+tar -xzf whyslow_db-0.2.3.tar.gz
 ```
 
 Create a versioned environment and install the wheel with CloudWatch support:
@@ -22,15 +22,15 @@ sudo useradd --system --home-dir /var/lib/whyslow \
   --shell /usr/sbin/nologin whyslow
 sudo install -d -o whyslow -g whyslow -m 0700 /var/lib/whyslow
 sudo mkdir -p /opt/whyslow/releases
-sudo python3 -m venv /opt/whyslow/releases/0.2.2
-sudo /opt/whyslow/releases/0.2.2/bin/python -m pip install --upgrade pip
-sudo /opt/whyslow/releases/0.2.2/bin/python -m pip install \
-  'whyslow-db[cloudwatch] @ file:///tmp/whyslow-v0.2.2/whyslow_db-0.2.2-py3-none-any.whl'
-sudo ln -sfn /opt/whyslow/releases/0.2.2 /opt/whyslow/venv
+sudo python3 -m venv /opt/whyslow/releases/0.2.3
+sudo /opt/whyslow/releases/0.2.3/bin/python -m pip install --upgrade pip
+sudo /opt/whyslow/releases/0.2.3/bin/python -m pip install \
+  'whyslow-db[cloudwatch] @ file:///tmp/whyslow-v0.2.3/whyslow_db-0.2.3-py3-none-any.whl'
+sudo ln -sfn /opt/whyslow/releases/0.2.3 /opt/whyslow/venv
 /opt/whyslow/venv/bin/whyslow --version
 ```
 
-Install the units from the extracted `whyslow_db-0.2.2/deploy/` directory into
+Install the units from the extracted `whyslow_db-0.2.3/deploy/` directory into
 `/etc/systemd/system/`. They deliberately
 invoke `/opt/whyslow/venv/bin/whyslow`, so switching the `venv` symlink selects
 one complete, immutable installation for every collector and maintenance timer.
@@ -106,7 +106,7 @@ downgrade.
 ## Creating a release
 
 Update the single version in `whyslow/__init__.py`, merge with green CI, then
-push a matching tag such as `v0.2.2`. The release workflow rejects a tag that
+push a matching tag such as `v0.2.3`. The release workflow rejects a tag that
 does not exactly match the package version. It builds and checks the wheel and
 source distribution, runs the isolated wheel smoke test, audits the installed
 runtime dependency tree for known vulnerabilities, and creates a versioned
