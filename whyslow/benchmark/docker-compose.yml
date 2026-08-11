@@ -18,6 +18,10 @@ services:
     command: >-
       postgres -c idle_in_transaction_session_timeout=0
                -c log_lock_waits=on
+               -c log_connections=on
+               -c log_disconnections=on
+               -c log_statement=all
+               -c log_line_prefix='%m [%p] user=%u db=%d app=%a '
                -c deadlock_timeout=1s
     ports:
       - "127.0.0.1:55432:5432"

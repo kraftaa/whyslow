@@ -213,6 +213,17 @@ def compose_down() -> tuple[bool, str]:
     return result.returncode == 0, (result.stderr or "").strip()
 
 
+def compose_logs(*, since: str) -> tuple[bool, str]:
+    """Return timestamped database logs since an RFC3339 timestamp."""
+    result = subprocess.run(
+        _compose_base() + ["logs", "--no-color", "--timestamps", "--since", since, "db"],
+        capture_output=True,
+        text=True,
+    )
+    output = "".join(part for part in (result.stdout, result.stderr) if part)
+    return result.returncode == 0, output
+
+
 def process_cmdline(pid: int) -> str | None:
     """Best-effort command line for a pid, used to confirm a pid is still one
     of our actors before signalling it (guards against pid reuse)."""

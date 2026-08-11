@@ -74,6 +74,9 @@ jobs:
       - name: Run pg_missing_index_v1 benchmark test
         run: python -m benchmark_tests.test_pg_missing_index_v1
 
+      - name: Run structured trajectory runner integration test
+        run: python -m benchmark_tests.test_trajectory_runner
+
       - name: Run pg_connection_exhaustion_v1 benchmark test
         run: python -m benchmark_tests.test_pg_connection_exhaustion_v1
 
