@@ -1,9 +1,9 @@
 """Structured trajectory capture for external benchmark responders.
 
-The runner captures observable behavior only: terminal input/output, process
-metadata, PostgreSQL server statements (Docker mode), workspace changes, and
-the deterministic final-state evaluation. It cannot capture private model
-reasoning or agent-internal tool events that are not emitted to the terminal.
+The runner captures observable behavior only: structured tool events when an
+adapter or agent protocol is available, terminal input/output, process metadata,
+PostgreSQL server statements (Docker mode), workspace changes, and deterministic
+final-state evaluation. It never captures private model reasoning.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import platform
 
 from whyslow import __version__
 from . import common
+from . import agent_timeline
 
 SCHEMA_VERSION = "whyslow-trajectory/1"
 DEFAULT_TIMEOUT_SECONDS = 600.0
@@ -316,6 +317,11 @@ def capture_command(
     """Run one responder command and capture its terminal trajectory."""
     if not command:
         raise ValueError("agent command must not be empty")
+    environment = environment.copy()
+    environment["WHYSLOW_BENCH_TIMELINE_PATH"] = str(
+        bundle_dir / agent_timeline.GENERIC_EVENTS_FILENAME
+    )
+    timeline_snapshot = agent_timeline.snapshot_agent_sources(command, environment)
     started_at = _utc_now()
     started = time.monotonic()
     events.write("agent_started", command=command, cwd=str(cwd), timeout_seconds=timeout)
@@ -348,6 +354,21 @@ def capture_command(
         "terminal_output_truncated": recorder.truncated,
         "terminal_bytes_captured": recorder.written,
     }
+    try:
+        result["command_timeline"] = agent_timeline.write_agent_timeline(
+            command=command,
+            bundle_dir=bundle_dir,
+            cwd=cwd,
+            environment=environment,
+            source_snapshot=timeline_snapshot,
+            started_at=result["started_at"],
+            ended_at=result["ended_at"],
+        )
+    except Exception as exc:
+        result["command_timeline"] = {
+            "captured": False,
+            "reason": f"timeline adapter error: {type(exc).__name__}: {exc}",
+        }
     events.write("agent_finished", **result)
     return result
 
@@ -482,6 +503,17 @@ def run_trajectory(
                 "workspace_after": "workspace-after.json",
                 "workspace_patch": "workspace.patch",
                 "result": "result.md" if (bundle_dir / "result.md").is_file() else None,
+                "timeline_jsonl": (
+                    "timeline.jsonl" if (bundle_dir / "timeline.jsonl").is_file() else None
+                ),
+                "timeline_markdown": (
+                    "timeline.md" if (bundle_dir / "timeline.md").is_file() else None
+                ),
+                "agent_events": (
+                    agent_timeline.GENERIC_EVENTS_FILENAME
+                    if (bundle_dir / agent_timeline.GENERIC_EVENTS_FILENAME).is_file()
+                    else None
+                ),
             },
         }
         events.write("runner_finished", bundle=str(bundle_dir), exit_code=exit_code)

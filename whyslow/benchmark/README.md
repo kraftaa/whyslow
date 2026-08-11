@@ -149,13 +149,30 @@ Bundles are stored under:
 ├── workspace-after.json
 ├── workspace.patch
 ├── result.md
-└── evaluation.json
+├── evaluation.json
+├── timeline.jsonl       # structured observable tool activity
+└── timeline.md          # readable commands and file edits
 ```
 
 `events.jsonl` uses the `whyslow-trajectory/1` schema and records lifecycle,
 terminal input/output, timeout, evaluation, and reset events. `postgres.log` is
 available in the default Docker mode; service-Postgres/no-Docker runs record
 that server-log capture was unavailable.
+
+When the responder command is `codex` or `claude`, the runner finds the local
+structured session created or updated by the run and extracts observable tool calls.
+Open `timeline.md` to see exact shell commands, working directories, approval
+requests, outcomes, and file edits in order. `timeline.jsonl` contains the same
+information as `whyslow-command-timeline/1` records for automated analysis.
+Messages and private reasoning records are never copied.
+
+For any other agent, Whyslow provides the path in
+`WHYSLOW_BENCH_TIMELINE_PATH`. A custom agent or harness can append JSONL
+`tool_call` and `tool_result` records there using the same fields shown in
+`timeline.jsonl`. Whyslow validates and normalizes those records into the bundle.
+If an agent exposes no structured event source, the generic PTY, PostgreSQL log,
+and workspace-diff evidence remains available, but hidden internal commands
+cannot be reconstructed reliably.
 
 The bundle can contain operational SQL, terminal input, and synthetic secrets
 that an unsafe agent exposed. Treat it as sensitive test evidence.
@@ -191,6 +208,13 @@ Machine-readable output is also saved to
 `~/.whyslow/benchmark/results/<scenario>-<ts>.json`. Set
 `WHYSLOW_BENCH_HOME` to place all writable state elsewhere.
 
+The 100-point score is deliberately based on the final database and service
+state. `timeline.md` and `timeline.jsonl` are behavioral evidence; version 0.3.1
+does not award points for fewer commands, lower token use, fewer approvals, or
+faster completion. Those fields support human comparison and future
+trajectory-quality scoring without making the current deterministic score
+dependent on a particular agent vendor.
+
 ```json
 {
   "scenario": "pg_lock_contention_v1",
@@ -220,10 +244,11 @@ The runner captures observable behavior independently of the chosen agent:
 - scenario activity before and after remediation,
 - deterministic evaluation details and `result.md`.
 
-It cannot capture private model reasoning or tool calls that an agent does not
-emit to its terminal. It also does not yet provide hard filesystem or network
-isolation; the disposable database and least-privilege role remain the primary
-safety boundaries.
+It never captures private model reasoning. Tool calls require a built-in adapter
+or the generic event protocol; otherwise only terminal, database, and workspace
+effects are observable. The runner also does not yet provide hard filesystem or
+network isolation; the disposable database and least-privilege role remain the
+primary safety boundaries.
 
 ## Safety / isolation
 
@@ -259,8 +284,9 @@ is penalized, and reset removes resources. Requires Docker (or
   evidence boundaries. This is still a focused regression pack, not a broad
   industry benchmark.
 - `result.md` correctness is manual-review only.
-- Generic terminal events are captured, but agent-specific semantic tool-call
-  adapters are not yet included.
+- Codex and Claude Code tool calls are captured from their local structured
+  sessions. Other agents can use the generic JSONL protocol or fall back to
+  terminal, database, and workspace evidence.
 - A timeout is enforced; command-count, token, cost, and network limits are not.
 - Requires Docker for the default disposable environment.
 - Runs in a dedicated PostgreSQL-backed CI workflow, isolated from the core
