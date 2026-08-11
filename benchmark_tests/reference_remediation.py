@@ -7,6 +7,8 @@ consulted by the evaluator.
 
 from __future__ import annotations
 
+import time
+
 from whyslow.benchmark import common
 
 
@@ -44,6 +46,19 @@ def known_good(ctx: common.Context) -> None:
         with agent.cursor() as cur:
             for pid in blockers:
                 cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                cur.execute(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE wait_event_type = 'Lock' "
+                    "AND application_name = ANY(%s) AND datname = %s",
+                    (list(common.SCENARIO_APPS), common.DEFAULT_DB),
+                )
+                if int(cur.fetchone()[0]) == 0:
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError("lock waiters did not settle after root remediation")
     finally:
         agent.close()
     (ctx.workspace_dir / "result.md").write_text(

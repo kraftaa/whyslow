@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
 
 import psycopg2
 
@@ -46,6 +47,19 @@ def _clear_root_blockers(conn) -> str:
         root_evidence = cur.fetchall()
         for pid in roots:
             cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            cur.execute(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE wait_event_type = 'Lock' "
+                "AND application_name IN ('analytics_job', 'web_app', 'healthcheck', 'leaky_pool') "
+                "AND datname = current_database()"
+            )
+            if int(cur.fetchone()[0]) == 0:
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("lock waiters did not settle after root remediation")
     return f"terminated root blocker(s) discovered from lock evidence: {root_evidence}"
 
 
