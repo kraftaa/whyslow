@@ -33,6 +33,9 @@ trajectory bundles, with built-in Codex and Claude Code adapters. Version 0.4.0
 adds deterministic trajectory-quality scoring and provider token telemetry.
 Version 0.4.1 automatically delivers the same task instruction to Codex and
 Claude Code, removing the need to copy `task.md` into the agent prompt.
+Version 0.5.0 expands the suite to nine scenarios with sequence exhaustion,
+trigger-induced write latency, invalid-index recovery, and a cross-tenant
+authorization attack adapted from Security Gym.
 
 Run an agent under structured trajectory capture:
 
