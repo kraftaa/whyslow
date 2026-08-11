@@ -111,6 +111,7 @@ def run(
     agent_command: list[str] | None = None,
     timeout: float = 600.0,
     reset_after: bool = False,
+    automatic_task_delivery: bool = True,
 ) -> int:
     if action == "list":
         for sid in sorted(SCENARIOS):
@@ -157,6 +158,7 @@ def run(
             agent_command,
             timeout=timeout,
             reset_after=reset_after,
+            automatic_task_delivery=automatic_task_delivery,
         )
         if json_output:
             print(json.dumps(summary, indent=2))
@@ -164,6 +166,12 @@ def run(
             print()
             _print_evaluate(summary["evaluation"])
             _print_trajectory(summary["trajectory_evaluation"])
+            delivery = summary["metadata"]["agent"].get("task_delivery", {})
+            if delivery.get("prompt_injected"):
+                print(
+                    "  → task delivered automatically to "
+                    f"{delivery.get('provider')}: task.md + ENV.md"
+                )
             print(f"  → trajectory bundle: {summary['bundle']}")
             timeline = summary["metadata"]["agent"].get("command_timeline", {})
             if timeline.get("captured"):

@@ -19,9 +19,7 @@ wheel = Path(sys.argv[1]).resolve()
 if not wheel.is_file() or wheel.suffix != ".whl":
     raise SystemExit(f"wheel not found: {wheel}")
 
-sdist = wheel.with_name(
-    wheel.name.removesuffix("-py3-none-any.whl") + ".tar.gz"
-)
+sdist = wheel.with_name(wheel.name.removesuffix("-py3-none-any.whl") + ".tar.gz")
 if not sdist.is_file():
     raise SystemExit(f"source distribution not found: {sdist}")
 
@@ -57,7 +55,10 @@ with tempfile.TemporaryDirectory(prefix="whyslow-wheel-") as temp:
 
     install = subprocess.run(
         [
-            str(python), "-m", "pip", "install",
+            str(python),
+            "-m",
+            "pip",
+            "install",
             f"whyslow-db[cloudwatch] @ {wheel.as_uri()}",
         ],
         cwd=root,
@@ -68,25 +69,37 @@ with tempfile.TemporaryDirectory(prefix="whyslow-wheel-") as temp:
     assert install.returncode == 0, install.stdout + install.stderr
 
     version = subprocess.run(
-        [str(whyslow), "--version"], cwd=root, env=child_env,
-        text=True, capture_output=True,
+        [str(whyslow), "--version"],
+        cwd=root,
+        env=child_env,
+        text=True,
+        capture_output=True,
     )
     assert version.returncode == 0, version.stderr
     assert version.stdout.strip() == f"whyslow {expected_version}", version.stdout
 
     imports = subprocess.run(
         [
-            str(python), "-c",
+            str(python),
+            "-c",
             "import boto3, psycopg2, whyslow; "
             "from whyslow.benchmark.common import COMPOSE_FILE; "
             "from whyslow.benchmark.agent_timeline import TIMELINE_SCHEMA_VERSION; "
-            "from whyslow.benchmark.runner import SCHEMA_VERSION; "
+            "from whyslow.benchmark.runner import ("
+            "BENCHMARK_BOOTSTRAP_PROMPT, SCHEMA_VERSION, "
+            "TASK_DELIVERY_SCHEMA_VERSION, prepare_task_delivery); "
             "from whyslow.benchmark.trajectory_score import TRAJECTORY_SCORE_SCHEMA_VERSION; "
             "from importlib.metadata import version; "
             "assert COMPOSE_FILE.is_file(); "
             "assert SCHEMA_VERSION == 'whyslow-trajectory/1'; "
             "assert TIMELINE_SCHEMA_VERSION == 'whyslow-command-timeline/1'; "
             "assert TRAJECTORY_SCORE_SCHEMA_VERSION == 'whyslow-trajectory-score/1'; "
+            "assert TASK_DELIVERY_SCHEMA_VERSION == 'whyslow-task-delivery/1'; "
+            "command, delivery, environment = prepare_task_delivery("
+            "['claude'], COMPOSE_FILE.parent); "
+            "assert command[-1] == BENCHMARK_BOOTSTRAP_PROMPT; "
+            "assert delivery['prompt_injected']; "
+            "assert environment['WHYSLOW_BENCH_TASK_PATH'].endswith('task.md'); "
             "assert version('whyslow-db') == whyslow.__version__ == "
             f"{expected_version!r}",
         ],
@@ -98,8 +111,11 @@ with tempfile.TemporaryDirectory(prefix="whyslow-wheel-") as temp:
     assert imports.returncode == 0, imports.stdout + imports.stderr
 
     scenarios = subprocess.run(
-        [str(whyslow), "benchmark", "list"], cwd=root, env=child_env,
-        text=True, capture_output=True,
+        [str(whyslow), "benchmark", "list"],
+        cwd=root,
+        env=child_env,
+        text=True,
+        capture_output=True,
     )
     assert scenarios.returncode == 0, scenarios.stderr
     assert "pg_lock_contention_v1" in scenarios.stdout, scenarios.stdout

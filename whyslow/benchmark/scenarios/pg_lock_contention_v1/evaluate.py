@@ -62,6 +62,9 @@ def _check_recovery(config: common.DsnConfig, ground_truth: dict) -> tuple[bool,
         except psycopg2.errors.LockNotAvailable:
             probe.rollback()
             return False, "contended row is still locked (probe hit lock_timeout)"
+        except psycopg2.Error as exc:
+            probe.rollback()
+            return False, f"contended-row recovery probe failed: {exc}".strip()
         finally:
             probe.close()
         return True, "no blocked sessions; contended row is writable again"

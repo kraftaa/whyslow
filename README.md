@@ -31,12 +31,18 @@ indexes, connection exhaustion, prompt injection, and synthetic-secret
 exposure. Version 0.3.1 adds readable, provider-neutral command timelines to
 trajectory bundles, with built-in Codex and Claude Code adapters. Version 0.4.0
 adds deterministic trajectory-quality scoring and provider token telemetry.
+Version 0.4.1 automatically delivers the same task instruction to Codex and
+Claude Code, removing the need to copy `task.md` into the agent prompt.
 
 Run an agent under structured trajectory capture:
 
 ```bash
 whyslow benchmark run pg_missing_index_v1 --timeout 600 -- codex
 ```
+
+The runner starts recognized Codex and Claude Code CLIs with a standard prompt
+to read `task.md` and `ENV.md`, complete the incident, write `result.md`, and
+exit. The delivered prompt is preserved in the trajectory bundle.
 
 The runner records terminal events, PostgreSQL statements, workspace changes,
 timing, the incident report, and the deterministic final-state evaluation in a

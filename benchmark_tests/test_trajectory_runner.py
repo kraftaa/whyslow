@@ -18,7 +18,14 @@ from whyslow.benchmark.agent_timeline import (
     write_claude_timeline,
     write_codex_timeline,
 )
-from whyslow.benchmark.runner import EventWriter, capture_command
+from whyslow.benchmark.runner import (
+    BENCHMARK_BOOTSTRAP_PROMPT,
+    EventWriter,
+    benchmark_run_lock,
+    capture_command,
+    prepare_task_delivery,
+)
+from whyslow.benchmark import common
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKE_AGENT = REPO_ROOT / "benchmark_tests" / "fake_trajectory_agent.py"
@@ -29,6 +36,88 @@ SCENARIOS = (
     "pg_connection_exhaustion_v1",
     "pg_secret_exposure_v1",
 )
+
+
+def _test_automatic_task_delivery() -> None:
+    workspace = Path("/tmp/whyslow-agent-workspace")
+    for provider, command in (
+        ("claude", ["claude", "--model", "sonnet"]),
+        ("codex", ["codex", "--model", "gpt-5"]),
+    ):
+        launched, delivery, environment = prepare_task_delivery(command, workspace)
+        assert launched == [*command, BENCHMARK_BOOTSTRAP_PROMPT], launched
+        assert delivery["provider"] == provider, delivery
+        assert delivery["mode"] == "positional-prompt", delivery
+        assert delivery["prompt_injected"] is True, delivery
+        assert environment["WHYSLOW_BENCH_TASK_PATH"] == str(workspace / "task.md")
+        assert environment["WHYSLOW_BENCH_ENV_PATH"] == str(workspace / "ENV.md")
+        assert environment["WHYSLOW_BENCH_RESULT_PATH"] == str(workspace / "result.md")
+        assert environment["WHYSLOW_BENCH_TASK_PROMPT"] == BENCHMARK_BOOTSTRAP_PROMPT
+
+    generic = [sys.executable, "agent.py"]
+    launched, delivery, _ = prepare_task_delivery(generic, workspace)
+    assert launched == generic, launched
+    assert delivery["provider"] == "generic", delivery
+    assert delivery["mode"] == "environment-contract", delivery
+    assert delivery["prompt_injected"] is False, delivery
+
+    launched, delivery, _ = prepare_task_delivery(["claude"], workspace, automatic=False)
+    assert launched == ["claude"], launched
+    assert delivery["mode"] == "disabled", delivery
+    assert delivery["prompt_injected"] is False, delivery
+
+
+def _test_injected_prompt_reaches_recognized_cli() -> None:
+    with tempfile.TemporaryDirectory(prefix="whyslow-task-delivery-") as temporary:
+        root = Path(temporary)
+        workspace = root / "workspace"
+        bundle = root / "bundle"
+        workspace.mkdir()
+        bundle.mkdir()
+        (workspace / "task.md").write_text("# Test task\n")
+        (workspace / "ENV.md").write_text("# Test environment\n")
+        fake_claude = root / "claude"
+        fake_claude.write_text(
+            f"#!{sys.executable}\n"
+            "import os, sys\n"
+            "print(sys.argv[-1])\n"
+            "print(os.environ['WHYSLOW_BENCH_TASK_PATH'])\n"
+        )
+        fake_claude.chmod(0o755)
+        command, delivery, task_environment = prepare_task_delivery([str(fake_claude)], workspace)
+        environment = os.environ.copy()
+        environment.update(task_environment)
+        environment["CLAUDE_CONFIG_DIR"] = str(root / "claude-home")
+        events = EventWriter(bundle / "events.jsonl")
+        try:
+            result = capture_command(
+                command,
+                cwd=workspace,
+                bundle_dir=bundle,
+                events=events,
+                timeout=5,
+                environment=environment,
+                task_delivery=delivery,
+            )
+        finally:
+            events.close()
+        terminal = (bundle / "terminal.log").read_text()
+        assert result["exit_code"] == 0, result
+        assert BENCHMARK_BOOTSTRAP_PROMPT in terminal, terminal
+        assert str(workspace / "task.md") in terminal, terminal
+
+
+def _test_concurrent_runs_are_rejected() -> None:
+    ctx = common.Context(
+        scenario_id="lock-test",
+        config=common.DsnConfig(host="127.0.0.1", port=65530, dbname="lock_test"),
+    )
+    with benchmark_run_lock(ctx):
+        try:
+            with benchmark_run_lock(ctx):
+                raise AssertionError("nested environment lock unexpectedly succeeded")
+        except RuntimeError as exc:
+            assert "already in use" in str(exc), exc
 
 
 def _test_timeout() -> None:
@@ -408,6 +497,7 @@ def _assert_bundle(bundle: Path, scenario: str) -> None:
         "workspace.patch",
         "evaluation.json",
         "trajectory-evaluation.json",
+        "task-delivery.json",
         "result.md",
     }
     assert required <= {path.name for path in bundle.iterdir()}, list(bundle.iterdir())
@@ -419,6 +509,8 @@ def _assert_bundle(bundle: Path, scenario: str) -> None:
     assert metadata["scenario"] == scenario, metadata
     assert metadata["agent"]["exit_code"] == 0, metadata
     assert metadata["agent"]["timed_out"] is False, metadata
+    assert metadata["agent"]["task_delivery"]["mode"] == "environment-contract", metadata
+    assert metadata["artifacts"]["task_delivery"] == "task-delivery.json", metadata
     assert metadata["reset_after"] is True, metadata
     assert evaluation["score"] == 100 and evaluation["passed"], evaluation
     assert trajectory["available"] is False, trajectory
@@ -433,6 +525,7 @@ def _assert_bundle(bundle: Path, scenario: str) -> None:
     )
     for expected in (
         "setup_started",
+        "task_delivered",
         "agent_started",
         "agent_output",
         "agent_finished",
@@ -487,6 +580,9 @@ def _test_full_runs() -> None:
 
 
 def main() -> int:
+    _test_automatic_task_delivery()
+    _test_injected_prompt_reaches_recognized_cli()
+    _test_concurrent_runs_are_rejected()
     _test_timeout()
     _test_background_child_cannot_hold_capture_open()
     _test_codex_command_timeline()

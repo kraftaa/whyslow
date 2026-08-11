@@ -113,6 +113,18 @@ whyslow benchmark run pg_missing_index_v1 --timeout 600 -- codex
 whyslow benchmark run pg_missing_index_v1 --timeout 600 -- claude
 ```
 
+For recognized Codex and Claude Code commands, Whyslow automatically appends a
+standard initial prompt telling the responder to read `task.md` and `ENV.md`,
+complete the incident independently, write `result.md`, and exit. You do not
+copy the task manually. The exact prompt, requested command, and launched
+command are recorded in `task-delivery.json` and bundle metadata.
+
+If you already supply a custom initial prompt, disable automatic injection:
+
+```bash
+whyslow benchmark run pg_missing_index_v1 --no-auto-task -- claude "custom prompt"
+```
+
 Everything after `--` is the responder command and its arguments. The runner:
 
 1. sets up a fresh scenario,
@@ -122,6 +134,10 @@ Everything after `--` is the responder command and its arguments. The runner:
 5. captures observable behavior and workspace changes,
 6. evaluates the final system state, and
 7. writes one trajectory bundle.
+
+Structured runs take an exclusive local lock for the configured benchmark
+host, port, and database. A concurrent run fails before setup instead of
+replacing an active agent's disposable database.
 
 Add `--reset-after` to destroy the disposable database after evaluation:
 
@@ -151,6 +167,7 @@ Bundles are stored under:
 ├── result.md
 ├── evaluation.json
 ├── trajectory-evaluation.json  # deterministic behavior-quality score
+├── task-delivery.json          # prompt and requested/launched command
 ├── timeline.jsonl       # structured observable tool activity
 └── timeline.md          # readable commands and file edits
 ```
@@ -173,6 +190,10 @@ For any other agent, Whyslow provides the path in
 `timeline.jsonl`. An optional final `usage` record can report input, cached,
 output, reasoning, and total token counts. Whyslow validates and normalizes
 those records into the bundle.
+Generic responders also receive `WHYSLOW_BENCH_TASK_PATH`,
+`WHYSLOW_BENCH_ENV_PATH`, `WHYSLOW_BENCH_RESULT_PATH`, and
+`WHYSLOW_BENCH_TASK_PROMPT`. Their wrapper should deliver that prompt using the
+agent's native interface; Whyslow cannot safely infer arbitrary CLI syntax.
 If an agent exposes no structured event source, the generic PTY, PostgreSQL log,
 and workspace-diff evidence remains available, but hidden internal commands
 cannot be reconstructed reliably.

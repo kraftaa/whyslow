@@ -8,6 +8,7 @@ final-state evaluation. It never captures private model reasoning.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import difflib
 from datetime import datetime, timezone
 import hashlib
@@ -20,6 +21,7 @@ import signal
 import subprocess
 import sys
 import time
+import tempfile
 import uuid
 import platform
 
@@ -32,6 +34,56 @@ SCHEMA_VERSION = "whyslow-trajectory/1"
 DEFAULT_TIMEOUT_SECONDS = 600.0
 DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 MAX_DIFF_FILE_BYTES = 256 * 1024
+TASK_DELIVERY_SCHEMA_VERSION = "whyslow-task-delivery/1"
+BENCHMARK_BOOTSTRAP_PROMPT = (
+    "You are the benchmark responder. Read task.md and ENV.md in the current "
+    "workspace. Investigate and complete the task independently, following all "
+    "constraints in those files. Write the required result.md, then exit when "
+    "finished."
+)
+
+
+@contextmanager
+def benchmark_run_lock(ctx: common.Context):
+    """Prevent local structured runs from replacing one shared environment."""
+    if os.name != "posix":
+        yield
+        return
+    import fcntl
+
+    identity = f"{ctx.config.host}-{ctx.config.port}-{ctx.config.dbname}"
+    safe_identity = "".join(char if char.isalnum() else "-" for char in identity)
+    path = Path(tempfile.gettempdir()) / f"whyslow-benchmark-{safe_identity}.lock"
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.seek(0)
+            owner = handle.read().strip() or "another local benchmark process"
+            raise RuntimeError(
+                "benchmark environment is already in use; wait for the active run "
+                f"to finish instead of starting/resetting the shared database ({owner})"
+            ) from exc
+        handle.seek(0)
+        handle.truncate()
+        handle.write(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "scenario": ctx.scenario_id,
+                    "started_at": _utc_now(),
+                },
+                sort_keys=True,
+            )
+        )
+        handle.flush()
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
 
 def _utc_now() -> str:
@@ -313,6 +365,7 @@ def capture_command(
     events: EventWriter,
     timeout: float,
     environment: dict[str, str],
+    task_delivery: dict | None = None,
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
 ) -> dict:
     """Run one responder command and capture its terminal trajectory."""
@@ -325,7 +378,13 @@ def capture_command(
     timeline_snapshot = agent_timeline.snapshot_agent_sources(command, environment)
     started_at = _utc_now()
     started = time.monotonic()
-    events.write("agent_started", command=command, cwd=str(cwd), timeout_seconds=timeout)
+    events.write(
+        "agent_started",
+        command=command,
+        cwd=str(cwd),
+        timeout_seconds=timeout,
+        task_delivery=task_delivery,
+    )
     with (bundle_dir / "terminal.log").open("wb") as terminal:
         mirror = getattr(sys.stdout, "buffer", None)
         recorder = _OutputRecorder(
@@ -354,6 +413,7 @@ def capture_command(
         "interactive_pty": interactive,
         "terminal_output_truncated": recorder.truncated,
         "terminal_bytes_captured": recorder.written,
+        "task_delivery": task_delivery,
     }
     try:
         result["command_timeline"] = agent_timeline.write_agent_timeline(
@@ -374,7 +434,47 @@ def capture_command(
     return result
 
 
-def _agent_environment(ctx: common.Context, run_id: str) -> dict[str, str]:
+def prepare_task_delivery(
+    command: list[str], workspace: Path, *, automatic: bool = True
+) -> tuple[list[str], dict, dict[str, str]]:
+    """Create a provider-neutral task contract and inject known CLI prompts."""
+    requested = list(command)
+    provider = agent_timeline.agent_provider(requested)
+    task_path = workspace / "task.md"
+    env_path = workspace / "ENV.md"
+    result_path = workspace / "result.md"
+    environment = {
+        "WHYSLOW_BENCH_TASK_PATH": str(task_path),
+        "WHYSLOW_BENCH_ENV_PATH": str(env_path),
+        "WHYSLOW_BENCH_RESULT_PATH": str(result_path),
+        "WHYSLOW_BENCH_TASK_PROMPT": BENCHMARK_BOOTSTRAP_PROMPT,
+    }
+    launched = list(requested)
+    prompt_injected = bool(automatic and provider in {"claude", "codex"})
+    if prompt_injected:
+        launched.append(BENCHMARK_BOOTSTRAP_PROMPT)
+    mode = "positional-prompt" if prompt_injected else "environment-contract"
+    if not automatic:
+        mode = "disabled"
+    delivery = {
+        "schema_version": TASK_DELIVERY_SCHEMA_VERSION,
+        "automatic": automatic,
+        "provider": provider or "generic",
+        "mode": mode,
+        "prompt_injected": prompt_injected,
+        "prompt": BENCHMARK_BOOTSTRAP_PROMPT,
+        "task_path": str(task_path),
+        "environment_path": str(env_path),
+        "result_path": str(result_path),
+        "requested_command": requested,
+        "launched_command": launched,
+    }
+    return launched, delivery, environment
+
+
+def _agent_environment(
+    ctx: common.Context, run_id: str, task_environment: dict[str, str]
+) -> dict[str, str]:
     environment = os.environ.copy()
     environment.update(
         {
@@ -388,6 +488,7 @@ def _agent_environment(ctx: common.Context, run_id: str) -> dict[str, str]:
             "WHYSLOW_BENCH_WORKSPACE": str(ctx.workspace_dir),
         }
     )
+    environment.update(task_environment)
     return environment
 
 
@@ -398,6 +499,28 @@ def run_trajectory(
     *,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     reset_after: bool = False,
+    automatic_task_delivery: bool = True,
+) -> dict:
+    """Run one scenario while exclusively owning its shared local environment."""
+    with benchmark_run_lock(ctx):
+        return _run_trajectory_locked(
+            scenario_module,
+            ctx,
+            command,
+            timeout=timeout,
+            reset_after=reset_after,
+            automatic_task_delivery=automatic_task_delivery,
+        )
+
+
+def _run_trajectory_locked(
+    scenario_module,
+    ctx: common.Context,
+    command: list[str],
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    reset_after: bool = False,
+    automatic_task_delivery: bool = True,
 ) -> dict:
     """Set up, run, capture, evaluate, and optionally reset one scenario."""
     if timeout <= 0:
@@ -421,13 +544,20 @@ def run_trajectory(
         before_manifest, before_text = snapshot_workspace(ctx.workspace_dir)
         common.write_json(bundle_dir / "workspace-before.json", before_manifest)
 
+        launched_command, task_delivery, task_environment = prepare_task_delivery(
+            command, ctx.workspace_dir, automatic=automatic_task_delivery
+        )
+        common.write_json(bundle_dir / "task-delivery.json", task_delivery)
+        events.write("task_delivered", **task_delivery)
+
         agent = capture_command(
-            command,
+            launched_command,
             cwd=ctx.workspace_dir,
             bundle_dir=bundle_dir,
             events=events,
             timeout=timeout,
-            environment=_agent_environment(ctx, run_id),
+            environment=_agent_environment(ctx, run_id, task_environment),
+            task_delivery=task_delivery,
         )
 
         postgres_log = {"captured": False, "reason": "non-Docker benchmark mode"}
@@ -534,6 +664,7 @@ def run_trajectory(
                     else None
                 ),
                 "trajectory_evaluation": "trajectory-evaluation.json",
+                "task_delivery": "task-delivery.json",
             },
         }
         events.write("runner_finished", bundle=str(bundle_dir), exit_code=exit_code)

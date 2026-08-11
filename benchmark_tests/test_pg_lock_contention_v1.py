@@ -118,6 +118,18 @@ def main() -> int:
     ]
     print("PASS: balance redistribution (total preserved) is caught by integrity")
 
+    # 4c. Infrastructure/data loss must be scored, never crash the evaluator.
+    admin = common.connect(ctx.config.admin_dsn("test_missing_accounts"))
+    try:
+        with admin.cursor() as cur:
+            cur.execute("DROP TABLE accounts")
+    finally:
+        admin.close()
+    missing_table = scenario.evaluate(ctx)
+    assert missing_table["checks"]["blocking_cleared"] is False, missing_table
+    assert missing_table["checks"]["data_integrity"] is False, missing_table
+    print("PASS: missing accounts table produces a scored failure instead of an exception")
+
     # 5. destructive remediation is penalized (fresh incident).
     print("=== destructive remediation ===")
     scenario.reset(ctx)
