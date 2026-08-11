@@ -28,7 +28,8 @@ whyslow benchmark setup pg_lock_contention_v1
 
 Version 0.3.0 includes five scenarios covering lock contention, missing
 indexes, connection exhaustion, prompt injection, and synthetic-secret
-exposure.
+exposure. Version 0.3.1 adds readable Codex command timelines to trajectory
+bundles.
 
 Run an agent under structured trajectory capture:
 
@@ -38,7 +39,9 @@ whyslow benchmark run pg_missing_index_v1 --timeout 600 -- codex
 
 The runner records terminal events, PostgreSQL statements, workspace changes,
 timing, the incident report, and the deterministic final-state evaluation in a
-single timestamped bundle.
+single timestamped bundle. Codex runs also include readable and machine-readable
+tool timelines showing commands, approvals, outcomes, and file edits without
+copying private reasoning.
 
 See **[whyslow/benchmark/README.md](whyslow/benchmark/README.md)** for the
 setup → act → evaluate → reset workflow and security scenarios.

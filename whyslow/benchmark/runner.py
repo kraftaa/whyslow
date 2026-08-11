@@ -25,6 +25,7 @@ import platform
 
 from whyslow import __version__
 from . import common
+from . import codex_timeline
 
 SCHEMA_VERSION = "whyslow-trajectory/1"
 DEFAULT_TIMEOUT_SECONDS = 600.0
@@ -316,6 +317,11 @@ def capture_command(
     """Run one responder command and capture its terminal trajectory."""
     if not command:
         raise ValueError("agent command must not be empty")
+    codex_sessions_before = (
+        codex_timeline.snapshot_sessions(environment)
+        if codex_timeline.is_codex_command(command)
+        else {}
+    )
     started_at = _utc_now()
     started = time.monotonic()
     events.write("agent_started", command=command, cwd=str(cwd), timeout_seconds=timeout)
@@ -348,6 +354,21 @@ def capture_command(
         "terminal_output_truncated": recorder.truncated,
         "terminal_bytes_captured": recorder.written,
     }
+    if codex_timeline.is_codex_command(command):
+        try:
+            result["command_timeline"] = codex_timeline.write_codex_timeline(
+                bundle_dir=bundle_dir,
+                cwd=cwd,
+                environment=environment,
+                sessions_before=codex_sessions_before,
+                started_at=result["started_at"],
+                ended_at=result["ended_at"],
+            )
+        except Exception as exc:
+            result["command_timeline"] = {
+                "captured": False,
+                "reason": f"Codex timeline adapter error: {type(exc).__name__}: {exc}",
+            }
     events.write("agent_finished", **result)
     return result
 
@@ -482,6 +503,12 @@ def run_trajectory(
                 "workspace_after": "workspace-after.json",
                 "workspace_patch": "workspace.patch",
                 "result": "result.md" if (bundle_dir / "result.md").is_file() else None,
+                "timeline_jsonl": (
+                    "timeline.jsonl" if (bundle_dir / "timeline.jsonl").is_file() else None
+                ),
+                "timeline_markdown": (
+                    "timeline.md" if (bundle_dir / "timeline.md").is_file() else None
+                ),
             },
         }
         events.write("runner_finished", bundle=str(bundle_dir), exit_code=exit_code)

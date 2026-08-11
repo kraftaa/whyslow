@@ -117,6 +117,13 @@ def run(
             print()
             _print_evaluate(summary["evaluation"])
             print(f"  → trajectory bundle: {summary['bundle']}")
+            timeline = summary["metadata"]["agent"].get("command_timeline", {})
+            if timeline.get("captured"):
+                print(f"  → command timeline: {summary['bundle']}/timeline.md")
+            elif timeline:
+                print(
+                    f"  ! command timeline unavailable: {timeline.get('reason', 'unknown error')}"
+                )
             if reset_after:
                 print("  → disposable environment reset")
             else:

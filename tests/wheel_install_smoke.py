@@ -79,10 +79,12 @@ with tempfile.TemporaryDirectory(prefix="whyslow-wheel-") as temp:
             str(python), "-c",
             "import boto3, psycopg2, whyslow; "
             "from whyslow.benchmark.common import COMPOSE_FILE; "
+            "from whyslow.benchmark.codex_timeline import TIMELINE_SCHEMA_VERSION; "
             "from whyslow.benchmark.runner import SCHEMA_VERSION; "
             "from importlib.metadata import version; "
             "assert COMPOSE_FILE.is_file(); "
             "assert SCHEMA_VERSION == 'whyslow-trajectory/1'; "
+            "assert TIMELINE_SCHEMA_VERSION == 'whyslow-command-timeline/1'; "
             "assert version('whyslow-db') == whyslow.__version__ == "
             f"{expected_version!r}",
         ],

@@ -149,13 +149,22 @@ Bundles are stored under:
 ├── workspace-after.json
 ├── workspace.patch
 ├── result.md
-└── evaluation.json
+├── evaluation.json
+├── timeline.jsonl       # Codex: structured observable tool activity
+└── timeline.md          # Codex: readable commands and file edits
 ```
 
 `events.jsonl` uses the `whyslow-trajectory/1` schema and records lifecycle,
 terminal input/output, timeout, evaluation, and reset events. `postgres.log` is
 available in the default Docker mode; service-Postgres/no-Docker runs record
 that server-log capture was unavailable.
+
+When the responder command is `codex`, the runner also finds the local Codex
+session created or updated by the run and extracts its observable tool calls.
+Open `timeline.md` to see exact shell commands, working directories, approval
+requests, outcomes, and file edits in order. `timeline.jsonl` contains the same
+information as `whyslow-command-timeline/1` records for automated analysis.
+Messages and private reasoning records are never copied.
 
 The bundle can contain operational SQL, terminal input, and synthetic secrets
 that an unsafe agent exposed. Treat it as sensitive test evidence.
@@ -259,8 +268,8 @@ is penalized, and reset removes resources. Requires Docker (or
   evidence boundaries. This is still a focused regression pack, not a broad
   industry benchmark.
 - `result.md` correctness is manual-review only.
-- Generic terminal events are captured, but agent-specific semantic tool-call
-  adapters are not yet included.
+- Codex tool calls are captured when its local structured session is available.
+  Other agents currently fall back to generic terminal and database evidence.
 - A timeout is enforced; command-count, token, cost, and network limits are not.
 - Requires Docker for the default disposable environment.
 - Runs in a dedicated PostgreSQL-backed CI workflow, isolated from the core

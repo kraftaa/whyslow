@@ -8,7 +8,9 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 
+from whyslow.benchmark.codex_timeline import snapshot_sessions, write_codex_timeline
 from whyslow.benchmark.runner import EventWriter, capture_command
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +72,99 @@ def _test_background_child_cannot_hold_capture_open() -> None:
         assert result["timed_out"] is True, result
         assert result["duration_seconds"] < 4, result
         assert "parent finished" in (bundle / "terminal.log").read_text(), result
+
+
+def _test_codex_command_timeline() -> None:
+    with tempfile.TemporaryDirectory(prefix="whyslow-codex-timeline-") as temporary:
+        root = Path(temporary)
+        workspace = root / "workspace"
+        bundle = root / "bundle"
+        workspace.mkdir()
+        bundle.mkdir()
+        environment = os.environ.copy()
+        environment["CODEX_HOME"] = str(root / "codex-home")
+        before = snapshot_sessions(environment)
+
+        now = datetime.now(timezone.utc)
+        started_at = (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+        ended_at = (now + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+        timestamp = now.isoformat().replace("+00:00", "Z")
+        session = Path(environment["CODEX_HOME"]) / "sessions" / "2026" / "08" / "run.jsonl"
+        session.parent.mkdir(parents=True)
+        exec_input = (
+            "const r = await tools.exec_command("
+            '{"cmd":"psql -c \\"SELECT 1\\"","workdir":"'
+            + str(workspace)
+            + '","sandbox_permissions":"require_escalated",'
+            '"justification":"Inspect the disposable database"}); text(r.output);'
+        )
+        patch_input = (
+            'const patch = "*** Begin Patch\\n*** Add File: result.md\\n+# Fixed\\n'
+            '*** End Patch"; text(await tools.apply_patch(patch));'
+        )
+        records = [
+            {
+                "timestamp": timestamp,
+                "type": "session_meta",
+                "payload": {"session_id": "session-test", "cwd": str(workspace)},
+            },
+            {
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "call_id": "call-1",
+                    "name": "exec",
+                    "input": exec_input,
+                },
+            },
+            {
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-1",
+                    "output": [{"type": "input_text", "text": "Script completed\\n"}],
+                },
+            },
+            {
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "call_id": "call-2",
+                    "name": "exec",
+                    "input": patch_input,
+                },
+            },
+            {
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "reasoning",
+                    "summary": [{"text": "must never be copied"}],
+                },
+            },
+        ]
+        session.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+        result = write_codex_timeline(
+            bundle_dir=bundle,
+            cwd=workspace,
+            environment=environment,
+            sessions_before=before,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+        assert result["captured"] is True, result
+        assert result["tool_calls"] == 2, result
+        timeline = (bundle / "timeline.md").read_text()
+        assert 'psql -c "SELECT 1"' in timeline, timeline
+        assert "Approval requested: Inspect the disposable database" in timeline, timeline
+        assert "result.md" in timeline, timeline
+        assert "must never be copied" not in timeline, timeline
+        jsonl = (bundle / "timeline.jsonl").read_text()
+        assert "must never be copied" not in jsonl, jsonl
 
 
 def _assert_bundle(bundle: Path, scenario: str) -> None:
@@ -159,6 +254,7 @@ def _test_full_runs() -> None:
 def main() -> int:
     _test_timeout()
     _test_background_child_cannot_hold_capture_open()
+    _test_codex_command_timeline()
     _test_full_runs()
     print("PASS: all scenario trajectories capture, evaluate, time out, and reset")
     return 0
