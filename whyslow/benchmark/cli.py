@@ -5,7 +5,7 @@ Usable two ways, identically:
     whyslow benchmark <action> <scenario>
     python -m whyslow.benchmark.cli <action> <scenario>
 
-Actions: list | setup | evaluate | reset | run
+Actions: list | setup | evaluate | reset | run | score-trajectory
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+from pathlib import Path
 import sys
 import time
 
@@ -64,6 +65,30 @@ def _print_evaluate(result: dict) -> None:
         print(f"  · MANUAL_REVIEW (result.md): {json.dumps(hints)}")
 
 
+def _print_trajectory(result: dict) -> None:
+    if not result.get("available"):
+        print(f"[trajectory] unavailable: {result.get('reason', 'no structured timeline')}")
+        return
+    print(
+        f"[trajectory] {result['score']}/{result['max_score']} "
+        f"({result['rating']}, {'PASS' if result['passed'] else 'REVIEW'})"
+    )
+    for name, component in result["components"].items():
+        if not component["available"]:
+            print(f"  · {name:<24}  N/A    {component['detail']}")
+            continue
+        mark = "✓" if component["points"] == component["max"] else "·"
+        print(
+            f"  {mark} {name:<24} {component['points']:>3}/{component['max']:<3}  "
+            f"{component['detail']}"
+        )
+    metrics = result.get("metrics", {})
+    ignored = int(metrics.get("ignored_control_plane_calls", 0))
+    if ignored:
+        tools = ", ".join(metrics.get("ignored_control_plane_tools", []))
+        print(f"  → ignored {ignored} control-plane call(s): {tools}")
+
+
 def _print_reset(info: dict) -> None:
     notes = []
     if "actor_processes_killed" in info:
@@ -93,6 +118,28 @@ def run(
             print(f"{sid:<24} {meta['summary']}")
         return 0
 
+    if action == "score-trajectory":
+        if not scenario:
+            raise SystemExit("score-trajectory requires a trajectory bundle path")
+        bundle = Path(scenario).expanduser().resolve()
+        metadata_path = bundle / "metadata.json"
+        if not metadata_path.is_file():
+            raise SystemExit(f"trajectory metadata not found: {metadata_path}")
+        metadata = json.loads(metadata_path.read_text())
+        agent = metadata.get("agent")
+        if not isinstance(agent, dict):
+            raise SystemExit(f"trajectory metadata has no agent record: {metadata_path}")
+        from .trajectory_score import evaluate_trajectory
+
+        result = evaluate_trajectory(bundle, agent)
+        common.write_json(bundle / "trajectory-evaluation.json", result)
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            _print_trajectory(result)
+            print(f"  → wrote {bundle / 'trajectory-evaluation.json'}")
+        return 0 if result["available"] else 1
+
     if not scenario:
         raise SystemExit(f"action {action!r} requires a scenario id (see `benchmark list`)")
 
@@ -116,6 +163,7 @@ def run(
         else:
             print()
             _print_evaluate(summary["evaluation"])
+            _print_trajectory(summary["trajectory_evaluation"])
             print(f"  → trajectory bundle: {summary['bundle']}")
             timeline = summary["metadata"]["agent"].get("command_timeline", {})
             if timeline.get("captured"):
@@ -170,8 +218,15 @@ def main(argv=None) -> int:
         description=__doc__,
         epilog="run syntax: benchmark run SCENARIO [options] -- COMMAND [ARG ...]",
     )
-    parser.add_argument("action", choices=["list", "setup", "evaluate", "reset", "run"])
-    parser.add_argument("scenario", nargs="?", help="scenario id, e.g. pg_lock_contention_v1")
+    parser.add_argument(
+        "action",
+        choices=["list", "setup", "evaluate", "reset", "run", "score-trajectory"],
+    )
+    parser.add_argument(
+        "scenario",
+        nargs="?",
+        help="scenario id, or a bundle path for score-trajectory",
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument("--timeout", type=float, default=600.0, help="run timeout in seconds")
     parser.add_argument(

@@ -26,6 +26,7 @@ import platform
 from whyslow import __version__
 from . import common
 from . import agent_timeline
+from . import trajectory_score
 
 SCHEMA_VERSION = "whyslow-trajectory/1"
 DEFAULT_TIMEOUT_SECONDS = 600.0
@@ -410,6 +411,7 @@ def run_trajectory(
     setup_info = None
     agent = None
     evaluation = None
+    trajectory_evaluation = None
     reset_info = None
     postgres_log = {"captured": False, "reason": "agent did not run"}
     try:
@@ -457,6 +459,15 @@ def run_trajectory(
             max_score=evaluation["max_score"],
             passed=evaluation["passed"],
         )
+        events.write("trajectory_evaluation_started")
+        trajectory_evaluation = trajectory_score.evaluate_trajectory(bundle_dir, agent)
+        common.write_json(bundle_dir / "trajectory-evaluation.json", trajectory_evaluation)
+        events.write(
+            "trajectory_evaluation_finished",
+            available=trajectory_evaluation["available"],
+            score=trajectory_evaluation.get("score"),
+            passed=trajectory_evaluation.get("passed"),
+        )
         if reset_after:
             events.write("reset_started")
             reset_info = scenario_module.reset(ctx)
@@ -492,6 +503,14 @@ def run_trajectory(
                 "passed": evaluation["passed"],
                 "path": "evaluation.json",
             },
+            "trajectory_evaluation": {
+                "available": trajectory_evaluation["available"],
+                "score": trajectory_evaluation.get("score"),
+                "max_score": trajectory_evaluation.get("max_score", 100),
+                "passed": trajectory_evaluation.get("passed"),
+                "path": "trajectory-evaluation.json",
+                "affects_final_state_score": False,
+            },
             "postgres_log": postgres_log,
             "reset_after": reset_after,
             "reset": reset_info,
@@ -514,6 +533,7 @@ def run_trajectory(
                     if (bundle_dir / agent_timeline.GENERIC_EVENTS_FILENAME).is_file()
                     else None
                 ),
+                "trajectory_evaluation": "trajectory-evaluation.json",
             },
         }
         events.write("runner_finished", bundle=str(bundle_dir), exit_code=exit_code)
@@ -522,6 +542,7 @@ def run_trajectory(
             "bundle": str(bundle_dir),
             "metadata": metadata,
             "evaluation": evaluation,
+            "trajectory_evaluation": trajectory_evaluation,
             "exit_code": exit_code,
         }
     except Exception as exc:
@@ -551,6 +572,7 @@ def run_trajectory(
                 "error": {"type": type(exc).__name__, "message": str(exc)},
                 "setup": setup_info,
                 "agent": agent,
+                "trajectory_evaluation": trajectory_evaluation,
                 "postgres_log": postgres_log,
                 "reset_after": reset_after,
                 "reset": reset_info,
