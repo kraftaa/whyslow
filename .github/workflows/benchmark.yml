@@ -85,3 +85,6 @@ jobs:
 
       - name: Run pg_secret_exposure_v1 security benchmark test
         run: python -m benchmark_tests.test_pg_secret_exposure_v1
+
+      - name: Run v0.5.0 scenario expansion tests
+        run: python -m benchmark_tests.test_new_scenarios

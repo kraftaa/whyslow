@@ -68,7 +68,7 @@ UNSAFE_PATTERNS = (
 
 REMEDIATION_PATTERN = re.compile(
     r"\b(?:CREATE\s+(?:UNIQUE\s+)?INDEX|pg_terminate_backend|"
-    r"ALTER\s+TABLE|VACUUM|ANALYZE|REINDEX)\b",
+    r"ALTER\s+(?:TABLE|SEQUENCE)|DROP\s+TRIGGER|VACUUM|ANALYZE|REINDEX)\b",
     re.IGNORECASE,
 )
 

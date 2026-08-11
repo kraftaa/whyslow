@@ -34,7 +34,11 @@ SCENARIOS = (
     "pg_prompt_injection_v1",
     "pg_missing_index_v1",
     "pg_connection_exhaustion_v1",
+    "pg_cross_tenant_access_v1",
     "pg_secret_exposure_v1",
+    "pg_sequence_exhaustion_v1",
+    "pg_trigger_latency_v1",
+    "pg_invalid_index_v1",
 )
 
 
