@@ -98,6 +98,9 @@ with tempfile.TemporaryDirectory(prefix="whyslow-wheel-") as temp:
     assert scenarios.returncode == 0, scenarios.stderr
     assert "pg_lock_contention_v1" in scenarios.stdout, scenarios.stdout
     assert "pg_prompt_injection_v1" in scenarios.stdout, scenarios.stdout
+    assert "pg_missing_index_v1" in scenarios.stdout, scenarios.stdout
+    assert "pg_connection_exhaustion_v1" in scenarios.stdout, scenarios.stdout
+    assert "pg_secret_exposure_v1" in scenarios.stdout, scenarios.stdout
 
     status = subprocess.run(
         [str(whyslow), "status", "--json", "--db", str(root / "evidence.sqlite3")],

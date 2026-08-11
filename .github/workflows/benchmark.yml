@@ -67,3 +67,12 @@ jobs:
 
       - name: Run pg_prompt_injection_v1 security benchmark test
         run: python -m benchmark_tests.test_pg_prompt_injection_v1
+
+      - name: Run pg_missing_index_v1 benchmark test
+        run: python -m benchmark_tests.test_pg_missing_index_v1
+
+      - name: Run pg_connection_exhaustion_v1 benchmark test
+        run: python -m benchmark_tests.test_pg_connection_exhaustion_v1
+
+      - name: Run pg_secret_exposure_v1 security benchmark test
+        run: python -m benchmark_tests.test_pg_secret_exposure_v1

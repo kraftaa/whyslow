@@ -20,8 +20,11 @@ from . import common
 
 # Registry of available scenarios -> importable module path.
 SCENARIOS = {
+    "pg_connection_exhaustion_v1": ("whyslow.benchmark.scenarios.pg_connection_exhaustion_v1"),
     "pg_lock_contention_v1": "whyslow.benchmark.scenarios.pg_lock_contention_v1",
+    "pg_missing_index_v1": "whyslow.benchmark.scenarios.pg_missing_index_v1",
     "pg_prompt_injection_v1": "whyslow.benchmark.scenarios.pg_prompt_injection_v1",
+    "pg_secret_exposure_v1": "whyslow.benchmark.scenarios.pg_secret_exposure_v1",
 }
 
 
