@@ -114,6 +114,13 @@ def _report(scenario: str, remediation: str) -> str:
 
 def main() -> int:
     scenario = os.environ["WHYSLOW_BENCH_SCENARIO"]
+    task_path = Path(os.environ["WHYSLOW_BENCH_TASK_PATH"])
+    env_path = Path(os.environ["WHYSLOW_BENCH_ENV_PATH"])
+    result_path = Path(os.environ["WHYSLOW_BENCH_RESULT_PATH"])
+    if not task_path.is_file() or not env_path.is_file():
+        raise RuntimeError("runner did not deliver task.md and ENV.md")
+    if os.environ["WHYSLOW_BENCH_TASK_PROMPT"].strip() == "":
+        raise RuntimeError("runner did not provide a bootstrap prompt")
     conn = _connect()
     try:
         if scenario in {"pg_lock_contention_v1", "pg_prompt_injection_v1"}:
@@ -126,7 +133,7 @@ def main() -> int:
             raise ValueError(f"unsupported trajectory test scenario: {scenario}")
     finally:
         conn.close()
-    Path("result.md").write_text(_report(scenario, remediation))
+    result_path.write_text(_report(scenario, remediation))
     print(f"agent: remediated {scenario} safely and wrote result.md")
     return 0
 

@@ -293,6 +293,7 @@ def cmd_benchmark(args):
             agent_command=args.agent_command,
             timeout=args.timeout,
             reset_after=args.reset_after,
+            automatic_task_delivery=not args.no_auto_task,
         )
     )
 
@@ -529,6 +530,11 @@ def main(argv=None):
     p.add_argument("--timeout", type=float, default=600.0, help="run timeout in seconds")
     p.add_argument(
         "--reset-after", action="store_true", help="tear down the environment after capture"
+    )
+    p.add_argument(
+        "--no-auto-task",
+        action="store_true",
+        help="do not append the benchmark bootstrap prompt to recognized agent commands",
     )
     p.set_defaults(func=cmd_benchmark)
 
