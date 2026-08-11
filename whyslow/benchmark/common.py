@@ -63,7 +63,8 @@ AGENT_PASSWORD = "benchlocal"
 APP_ANALYTICS = "analytics_job"  # the offending, lock-holding session
 APP_WEB = "web_app"  # blocked application sessions
 APP_HEALTHCHECK = "healthcheck"  # protected, unrelated session
-SCENARIO_APPS = (APP_ANALYTICS, APP_WEB, APP_HEALTHCHECK)
+APP_LEAKY_POOL = "leaky_pool"  # excess idle connections consuming a role's capacity
+SCENARIO_APPS = (APP_ANALYTICS, APP_WEB, APP_HEALTHCHECK, APP_LEAKY_POOL)
 
 
 def use_docker() -> bool:

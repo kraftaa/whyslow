@@ -20,7 +20,7 @@ reviewers if releases should need manual approval. No PyPI API token is needed.
 
 1. Ensure `whyslow.__version__` contains the intended version.
 2. Merge the change and confirm the full `test` workflow is green on `main`.
-3. Create and push the matching tag, for example `v0.2.1`.
+3. Create and push the matching tag, for example `v0.2.2`.
 4. The release workflow builds and validates the wheel and source archive,
    audits dependencies, creates an SBOM and checksums, publishes with GitHub
    OIDC, and attaches the same artifacts to a GitHub Release.
