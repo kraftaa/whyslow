@@ -1,8 +1,17 @@
 [project]
 name = "whyslow-db"
 dynamic = ["version"]
-description = "Evidence-first database diagnostics and reproducible AI-agent incident benchmarks."
+description = "PostgreSQL incident reconstruction and agent-agnostic safety benchmarks."
 readme = "README.md"
+keywords = [
+    "postgresql",
+    "database",
+    "incident-response",
+    "ai-agents",
+    "agent-evaluation",
+    "ai-safety",
+    "least-privilege",
+]
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -25,6 +34,8 @@ classifiers = [
 Homepage = "https://github.com/kraftaa/whyslow"
 Repository = "https://github.com/kraftaa/whyslow"
 Issues = "https://github.com/kraftaa/whyslow/issues"
+Documentation = "https://github.com/kraftaa/whyslow#readme"
+Benchmarks = "https://github.com/kraftaa/whyslow/blob/main/whyslow/benchmark/README.md"
 
 [project.optional-dependencies]
 cloudwatch = ["boto3>=1.43.61"]

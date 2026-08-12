@@ -1,11 +1,13 @@
 # whyslow
 
-**Why is it slow?** Deterministic, evidence-first incident reconstruction for
-Aurora Postgres + Puma — not another monitoring dashboard.
+**Why is it slow — and did the agent fix it safely?**
 
-A CLI that reconstructs *why* web servers slowed down, from data already being
-collected — instead of a team hand-correlating Puma stats, CloudWatch, and
-`pg_stat_activity` by eye at 2am.
+Whyslow is an evidence-first PostgreSQL toolkit with two related jobs:
+
+1. reconstruct why an Aurora PostgreSQL + Puma service slowed down, using data
+   already collected; and
+2. evaluate whether an AI agent or human repaired a disposable PostgreSQL
+   incident correctly, efficiently, and within defined safety boundaries.
 
 ```
 whyslow --from 11:42 --to 11:47      # or: whyslow --last 15m
@@ -18,32 +20,43 @@ pipx install whyslow-db
 # or: python -m pip install whyslow-db
 ```
 
-The package also includes reproducible PostgreSQL incidents for evaluating AI
-agents and humans:
+## Test database agents before trusting them
+
+With Docker and Docker Compose installed, the package also includes nine
+reproducible PostgreSQL incidents for evaluating AI agents and humans. Each run
+creates a live but disposable database, lets a responder investigate and act,
+then independently checks what actually changed.
+
+The benchmark is **agent-agnostic**. Codex, Claude Code, another CLI agent, a
+custom harness, or a human can work on the same task and be evaluated against
+the same hidden ground truth. Codex and Claude Code have built-in command
+timeline adapters; other harnesses can emit the provider-neutral JSONL format.
+
+The nine scenarios cover operational failures and adversarial safety cases:
+
+- lock contention, missing indexes, connection exhaustion, sequence
+  exhaustion, trigger latency, and invalid-index recovery;
+- prompt injection hidden in database evidence, synthetic-secret handling,
+  and cross-tenant least-privilege repair.
+
+Evaluators check incident recovery, data integrity, collateral damage, tenant
+isolation, least privilege, unsafe operations, and the observable commands the
+responder executed.
 
 ```bash
 whyslow benchmark list
-whyslow benchmark setup pg_lock_contention_v1
+whyslow benchmark run pg_cross_tenant_access_v1 \
+  --timeout 600 --reset-after -- claude
 ```
 
-Version 0.3.0 includes five scenarios covering lock contention, missing
-indexes, connection exhaustion, prompt injection, and synthetic-secret
-exposure. Version 0.3.1 adds readable, provider-neutral command timelines to
-trajectory bundles, with built-in Codex and Claude Code adapters. Version 0.4.0
-adds deterministic trajectory-quality scoring and provider token telemetry.
-Version 0.4.1 automatically delivers the same task instruction to Codex and
-Claude Code, removing the need to copy `task.md` into the agent prompt.
-Version 0.5.0 expands the suite to nine scenarios with sequence exhaustion,
-trigger-induced write latency, invalid-index recovery, and a cross-tenant
-authorization attack adapted from Security Gym.
-Version 0.5.1 makes trajectory reliability provider-aware: explicit successful
-diagnostic denials remain observable without being mislabeled as failed
-commands, and privilege repairs are recognized in remediation timing.
-
-Run an agent under structured trajectory capture:
+For a non-interactive Codex run, use `codex exec`. The generated benchmark
+workspace is intentionally not a Git repository, so Codex also needs
+`--skip-git-repo-check`:
 
 ```bash
-whyslow benchmark run pg_missing_index_v1 --timeout 600 -- codex
+whyslow benchmark run pg_cross_tenant_access_v1 \
+  --timeout 600 --reset-after -- \
+  codex exec --skip-git-repo-check --approve-for-me
 ```
 
 The runner starts recognized Codex and Claude Code CLIs with a standard prompt
@@ -57,13 +70,26 @@ machine-readable tool timelines showing commands, outcomes, and file edits
 without copying private reasoning. Other agent harnesses can emit the same
 provider-neutral JSONL protocol.
 
-Every structured run now produces two independent scores: whether the system
-was repaired correctly, and how safely and efficiently the agent got there.
+Every structured run produces two independent scores:
 
-See **[whyslow/benchmark/README.md](whyslow/benchmark/README.md)** for the
+- **Final state:** was the system repaired without breaking protected state or
+  crossing the scenario's security boundary?
+- **Trajectory:** how reliably, efficiently, and safely did the responder get
+  there?
+
+This is a focused PostgreSQL regression pack, not a guarantee of production
+safety or a claim that an agent will behave safely outside the tested
+boundaries. It is RL-compatible in the narrow reset → act → evaluate sense;
+it evaluates responders but does not train models or make LLM API calls.
+
+The database is disposable, but the agent process still runs on your host under
+its own sandbox and approval policy. Do not disable those protections merely
+because the benchmark database is isolated.
+
+See **[the benchmark guide](https://github.com/kraftaa/whyslow/blob/main/whyslow/benchmark/README.md)** for the
 setup → act → evaluate → reset workflow and security scenarios.
 
-**During an incident, go straight to [RUNBOOK.md](RUNBOOK.md)** — what to type,
+**During an incident, go straight to [RUNBOOK.md](https://github.com/kraftaa/whyslow/blob/main/RUNBOOK.md)** — what to type,
 and what each answer means.
 
 ## Why this exists
@@ -75,16 +101,17 @@ anything sharing the DB instance's CPU/IO). This correlates the three places
 you'd otherwise check by hand and reconstructs the incident window into one
 plain-English timeline.
 
-## How it works
+## How incident reconstruction works
 
-No model, no statistics, no scoring formula — every conclusion is a lookup
+The incident-reconstruction mode uses no model, statistics, or scoring formula:
+every conclusion is a lookup
 against rows the collectors already wrote. Three collectors (Postgres, Puma,
 CloudWatch) write to one SQLite file on a timer; `explain` reconstructs any
 past window from that stored data, names the contributors, and shows the exact
 evidence lines behind each one. Every tunable lives in plain sight at the top
 of `explain.py`.
 
-See **[docs/design.md](docs/design.md)** for the six-step mechanism, why it
+See **[docs/design.md](https://github.com/kraftaa/whyslow/blob/main/docs/design.md)** for the six-step mechanism, why it
 needs no named integrations, and the evidence that it works.
 
 ## Quickstart
@@ -117,8 +144,8 @@ whyslow status          # is everything actually collecting?
 ```
 
 Production install (versioned wheel, checksum verification, systemd, rollback)
-is in **[INSTALL.md](INSTALL.md)**. Full setup, querying, events, and `diff`
-are in **[docs/usage.md](docs/usage.md)**.
+is in **[INSTALL.md](https://github.com/kraftaa/whyslow/blob/main/INSTALL.md)**. Full setup, querying, events, and `diff`
+are in **[docs/usage.md](https://github.com/kraftaa/whyslow/blob/main/docs/usage.md)**.
 
 ## Honest limits
 
@@ -137,12 +164,12 @@ are in **[docs/usage.md](docs/usage.md)**.
 
 ## Documentation
 
-- **[RUNBOOK.md](RUNBOOK.md)** — what to type during an incident, and what each answer means
-- **[INSTALL.md](INSTALL.md)** — versioned production install, checksums, systemd, rollback
-- **[docs/usage.md](docs/usage.md)** — running collectors, querying, events, `diff`
-- **[docs/operations.md](docs/operations.md)** — `status`/`doctor`, deployment, reliability & retention
-- **[docs/design.md](docs/design.md)** — how it works, why no integrations, evidence, scope
-- **[docs/publishing.md](docs/publishing.md)** — PyPI Trusted Publishing and release procedure
-- **[JSON_OUTPUT.md](JSON_OUTPUT.md)** — the stable, versioned JSON contract
-- **[AUDIT_LOG.md](AUDIT_LOG.md)** — bugs found by repeated audits, round by round
-- **[writing/](writing/)** — the four most transferable findings, written up as standalone posts
+- **[RUNBOOK.md](https://github.com/kraftaa/whyslow/blob/main/RUNBOOK.md)** — what to type during an incident, and what each answer means
+- **[INSTALL.md](https://github.com/kraftaa/whyslow/blob/main/INSTALL.md)** — versioned production install, checksums, systemd, rollback
+- **[docs/usage.md](https://github.com/kraftaa/whyslow/blob/main/docs/usage.md)** — running collectors, querying, events, `diff`
+- **[docs/operations.md](https://github.com/kraftaa/whyslow/blob/main/docs/operations.md)** — `status`/`doctor`, deployment, reliability & retention
+- **[docs/design.md](https://github.com/kraftaa/whyslow/blob/main/docs/design.md)** — how it works, why no integrations, evidence, scope
+- **[docs/publishing.md](https://github.com/kraftaa/whyslow/blob/main/docs/publishing.md)** — PyPI Trusted Publishing and release procedure
+- **[JSON_OUTPUT.md](https://github.com/kraftaa/whyslow/blob/main/JSON_OUTPUT.md)** — the stable, versioned JSON contract
+- **[AUDIT_LOG.md](https://github.com/kraftaa/whyslow/blob/main/AUDIT_LOG.md)** — bugs found by repeated audits, round by round
+- **[writing/](https://github.com/kraftaa/whyslow/tree/main/writing)** — the four most transferable findings, written up as standalone posts

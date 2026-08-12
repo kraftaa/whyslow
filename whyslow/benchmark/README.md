@@ -1,9 +1,14 @@
 # whyslow benchmark — agent-evaluation environment
 
-A small, reproducible **agent evaluation environment** included in the
-`whyslow-db` distribution. It creates a real PostgreSQL incident, hands it to an external agent
-(Claude Code, Codex, or a human), and then **deterministically scores the
-resulting system state**.
+A focused, reproducible **PostgreSQL agent-evaluation environment** included in
+the `whyslow-db` distribution. It creates a live but disposable incident, hands
+it to an external responder, and then deterministically scores both the final
+system state and the observable execution trajectory.
+
+It is **agent-agnostic**: Claude Code, Codex, another CLI agent, a custom
+harness, or a human can work on the same task and be evaluated against the same
+hidden ground truth. Built-in Codex and Claude Code adapters capture command
+timelines; other harnesses can use the provider-neutral JSONL protocol.
 
 It is an *RL-compatible environment* in the narrow sense that it exposes a
 reset → act → evaluate loop with an objective reward. **It evaluates agents; it
@@ -25,8 +30,10 @@ reproducible real incident
 - **Agent** — anything that can run a shell and `psql`. The benchmark is
   model-independent and needs no custom wrapper or tool API. `setup` prints a
   generated workspace path containing `task.md`, `ENV.md`, and `result.md`.
-- **Evaluator** — deterministic checks over the database state and workspace.
-  It never inspects *how* the agent worked. Hidden ground truth lives in
+- **Evaluators** — deterministic final-state checks score the database and
+  workspace, while a separate trajectory evaluator scores observable commands,
+  failures, retries, approvals, timing, and unsafe operations. Neither evaluator
+  reads private model reasoning. Hidden ground truth lives in
   `~/.whyslow/benchmark/runs/<id>/.state/` and is never shown to the agent.
 
 ## Included scenarios
@@ -126,7 +133,7 @@ whyslow benchmark setup pg_lock_contention_v1
 
 # 2. Point an agent at the workspace and give it the task
 cd ~/.whyslow/benchmark/runs/pg_lock_contention_v1/workspace
-claude                       # or: codex, or a human in a shell
+claude                       # or: codex --skip-git-repo-check, or a human
 #   give the agent the contents of task.md; connection info is in ENV.md
 
 # 3. Score the resulting system state
@@ -143,9 +150,12 @@ Use `run` when you want a reproducible record of how the responder behaved,
 not only its final score:
 
 ```bash
-whyslow benchmark run pg_missing_index_v1 --timeout 600 -- codex
-# or
-whyslow benchmark run pg_missing_index_v1 --timeout 600 -- claude
+whyslow benchmark run pg_missing_index_v1 \
+  --timeout 600 --reset-after -- claude
+
+whyslow benchmark run pg_missing_index_v1 \
+  --timeout 600 --reset-after -- \
+  codex exec --skip-git-repo-check --approve-for-me
 ```
 
 For recognized Codex and Claude Code commands, Whyslow automatically appends a
@@ -178,7 +188,8 @@ Add `--reset-after` to destroy the disposable database after evaluation:
 
 ```bash
 whyslow benchmark run pg_missing_index_v1 \
-  --timeout 600 --reset-after -- codex
+  --timeout 600 --reset-after -- \
+  codex exec --skip-git-repo-check --approve-for-me
 ```
 
 Without `--reset-after`, the environment remains available for inspection and
@@ -244,7 +255,8 @@ agent runs against it identically:
 ```bash
 whyslow benchmark setup pg_lock_contention_v1
 cd ~/.whyslow/benchmark/runs/pg_lock_contention_v1/workspace
-codex   # or aider, or your own harness, or a human — all see the same task.md/ENV.md
+codex --skip-git-repo-check
+# or aider, your own harness, or a human — all see the same task.md/ENV.md
 # ... agent works, writes result.md ...
 whyslow benchmark evaluate pg_lock_contention_v1 --json
 ```
@@ -353,6 +365,9 @@ primary safety boundaries.
   by that incident. It has no access to a real or unrelated database.
 - The evaluator independently detects obvious destructive "solutions" (dropped
   protected tables, deleted rows, altered balances, a killed unrelated session).
+- The database is isolated, but the external agent command runs on the host.
+  Keep the provider's normal sandbox and approval controls enabled; do not use
+  dangerous approval/sandbox bypass flags for benchmark convenience.
 
 ## Tests
 
