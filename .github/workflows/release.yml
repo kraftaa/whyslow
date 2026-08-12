@@ -37,9 +37,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          SUCCESSFUL_RUNS="$(gh run list --workflow test.yml --commit "$GITHUB_SHA" \
-            --status success --json databaseId --jq length)"
-          test "$SUCCESSFUL_RUNS" -gt 0
+          # A tag push starts this workflow and test.yml concurrently. Wait for
+          # the test run instead of treating normal Actions scheduling as a
+          # failed release gate.
+          for attempt in $(seq 1 30); do
+            SUCCESSFUL_RUNS="$(gh run list --workflow test.yml --commit "$GITHUB_SHA" \
+              --status success --json databaseId --jq length)"
+            if test "$SUCCESSFUL_RUNS" -gt 0; then
+              exit 0
+            fi
+            echo "Waiting for successful test.yml run for $GITHUB_SHA ($attempt/30)"
+            sleep 10
+          done
+          echo "No successful test.yml run found for $GITHUB_SHA after 5 minutes"
+          gh run list --workflow test.yml --commit "$GITHUB_SHA" \
+            --json databaseId,status,conclusion,url
+          exit 1
 
       - name: Build and validate distributions
         run: |
