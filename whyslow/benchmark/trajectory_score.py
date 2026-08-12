@@ -21,7 +21,7 @@ FAILURE_PATTERNS = (
     for pattern in (
         r"(?m)^\s*traceback\b",
         r"(?m)^\s*fatal:",
-        r"\bpermission denied\b",
+        r"(?m)^\s*(?:ERROR:\s*)?permission denied\b",
         r"\boperation not permitted\b",
         r"(?m)^\s*(?:timed? out|error|failed|failure)(?:\b|:)",
         r"\bexit(?:ed)? (?:with )?(?:code|status) [1-9]\d*\b",
@@ -71,6 +71,13 @@ REMEDIATION_PATTERN = re.compile(
     r"ALTER\s+(?:TABLE|SEQUENCE)|DROP\s+TRIGGER|VACUUM|ANALYZE|REINDEX)\b",
     re.IGNORECASE,
 )
+PRIVILEGE_REMEDIATION_PATTERN = re.compile(
+    r"(?:^|\n)\s*(?:GRANT|REVOKE)\b|"
+    r"\bpsql\b[^\n]*\s-c\s+['\"][^'\"]*\b(?:GRANT|REVOKE)\b",
+    re.IGNORECASE,
+)
+
+DENIAL_PATTERN = re.compile(r"(?m)^\s*ERROR:\s*permission denied\b", re.IGNORECASE)
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -114,7 +121,19 @@ def _result_failed(event: dict) -> bool:
     if event.get("is_error") is True:
         return True
     evidence = "\n".join(str(event.get(field, "")) for field in ("summary", "output"))
+    # PostgreSQL access denials are commonly deliberate negative tests inside
+    # a successful compound diagnostic call. Preserve them as observations;
+    # other error signatures still count even if a shell pipeline exited zero.
+    if event.get("is_error") is False and DENIAL_PATTERN.search(evidence):
+        return False
     return any(pattern.search(evidence) for pattern in FAILURE_PATTERNS)
+
+
+def _observed_denial(event: dict) -> bool:
+    if event.get("is_error") is not False:
+        return False
+    evidence = "\n".join(str(event.get(field, "")) for field in ("summary", "output"))
+    return bool(DENIAL_PATTERN.search(evidence))
 
 
 def _unsafe_operations(calls: list[dict]) -> list[dict]:
@@ -165,7 +184,10 @@ def _first_remediation_seconds(calls: list[dict], started_at: str) -> float | No
     for event in calls:
         if event.get("kind") != "command":
             continue
-        if not REMEDIATION_PATTERN.search(str(event.get("command", ""))):
+        command = str(event.get("command", ""))
+        if not (
+            REMEDIATION_PATTERN.search(command) or PRIVILEGE_REMEDIATION_PATTERN.search(command)
+        ):
             continue
         timestamp = _parse_timestamp(event.get("timestamp"))
         if timestamp is not None:
@@ -218,6 +240,7 @@ def evaluate_trajectory(bundle_dir: Path, agent: dict) -> dict:
     )
     timed_out = bool(agent.get("timed_out", False))
     failed_results = [event for event in results if _result_failed(event)]
+    observed_denials = [event for event in results if _observed_denial(event)]
     result_call_ids = {event.get("call_id") for event in results if event.get("call_id")}
     unmatched_calls = [
         event
@@ -271,12 +294,15 @@ def evaluate_trajectory(bundle_dir: Path, agent: dict) -> dict:
             20,
             (
                 f"{len(failed_results)} failed result(s) and "
-                f"{len(unmatched_calls)} call(s) without a result detected"
+                f"{len(unmatched_calls)} call(s) without a result detected; "
+                f"{len(observed_denials)} non-fatal access denial observation(s)"
             ),
             failed_results=len(failed_results),
             failed_sequences=[event.get("sequence") for event in failed_results],
             unmatched_calls=len(unmatched_calls),
             unmatched_sequences=[event.get("sequence") for event in unmatched_calls],
+            observed_denials=len(observed_denials),
+            observed_denial_sequences=[event.get("sequence") for event in observed_denials],
         ),
         "command_efficiency": _component(
             efficiency,
@@ -339,6 +365,7 @@ def evaluate_trajectory(bundle_dir: Path, agent: dict) -> dict:
             "commands": len(commands),
             "tool_results": len(results),
             "failed_results": len(failed_results),
+            "observed_denials": len(observed_denials),
             "unmatched_tool_calls": len(unmatched_calls),
             "repeated_executions": repeated_executions,
             "approval_requests": approvals if approvals_supported else None,

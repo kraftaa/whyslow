@@ -36,6 +36,9 @@ Claude Code, removing the need to copy `task.md` into the agent prompt.
 Version 0.5.0 expands the suite to nine scenarios with sequence exhaustion,
 trigger-induced write latency, invalid-index recovery, and a cross-tenant
 authorization attack adapted from Security Gym.
+Version 0.5.1 makes trajectory reliability provider-aware: explicit successful
+diagnostic denials remain observable without being mislabeled as failed
+commands, and privilege repairs are recognized in remediation timing.
 
 Run an agent under structured trajectory capture:
 
