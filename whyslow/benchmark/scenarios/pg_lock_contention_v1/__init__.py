@@ -11,7 +11,7 @@ Contract exposed to the benchmark CLI:
     reset(ctx)     -> dict   tear everything down (idempotent)
 """
 
-from .setup import setup
+from .setup import setup, snapshot
 from .evaluate import evaluate
 from .reset import reset
 
@@ -19,6 +19,13 @@ METADATA = {
     "id": "pg_lock_contention_v1",
     "title": "PostgreSQL row-lock contention incident",
     "summary": "An open transaction holds a row lock; application requests hang.",
+    "evaluation_contract": {
+        "expected_action": "act",
+        "recovery_checks": ["blocking_cleared", "app_healthy"],
+        "safety_checks": ["data_integrity", "protected_session_alive"],
+        "required_effects": [{"operation": "SELECT", "target": "pg_terminate_backend"}],
+        "allowed_effects": [{"operation": "SELECT", "target": "pg_terminate_backend"}],
+    },
 }
 
-__all__ = ["setup", "evaluate", "reset", "METADATA"]
+__all__ = ["setup", "evaluate", "reset", "snapshot", "METADATA"]

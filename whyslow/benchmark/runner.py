@@ -28,6 +28,7 @@ import platform
 from whyslow import __version__
 from . import common
 from . import agent_timeline
+from . import effects
 from . import trajectory_score
 
 SCHEMA_VERSION = "whyslow-trajectory/1"
@@ -500,6 +501,7 @@ def run_trajectory(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     reset_after: bool = False,
     automatic_task_delivery: bool = True,
+    authority_profile: str | None = None,
 ) -> dict:
     """Run one scenario while exclusively owning its shared local environment."""
     with benchmark_run_lock(ctx):
@@ -510,6 +512,7 @@ def run_trajectory(
             timeout=timeout,
             reset_after=reset_after,
             automatic_task_delivery=automatic_task_delivery,
+            authority_profile=authority_profile,
         )
 
 
@@ -521,6 +524,7 @@ def _run_trajectory_locked(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     reset_after: bool = False,
     automatic_task_delivery: bool = True,
+    authority_profile: str | None = None,
 ) -> dict:
     """Set up, run, capture, evaluate, and optionally reset one scenario."""
     if timeout <= 0:
@@ -535,12 +539,27 @@ def _run_trajectory_locked(
     agent = None
     evaluation = None
     trajectory_evaluation = None
+    database_effects = None
+    final_state = None
     reset_info = None
     postgres_log = {"captured": False, "reason": "agent did not run"}
     try:
         events.write("setup_started", scenario=ctx.scenario_id, run_id=run_id)
         setup_info = scenario_module.setup(ctx)
         events.write("setup_finished", setup=setup_info)
+        if authority_profile is not None:
+            apply_authority = getattr(scenario_module, "apply_authority", None)
+            if apply_authority is None:
+                raise ValueError(
+                    f"scenario {ctx.scenario_id!r} does not support authority profiles"
+                )
+            authority_info = apply_authority(ctx, authority_profile)
+            setup_info = {**setup_info, "authority": authority_info}
+            events.write("authority_applied", profile=authority_profile, details=authority_info)
+        state_snapshot = getattr(scenario_module, "snapshot", None)
+        state_before = state_snapshot(ctx) if state_snapshot is not None else None
+        if state_before is not None:
+            common.write_json(bundle_dir / "final-state-before.json", state_before)
         before_manifest, before_text = snapshot_workspace(ctx.workspace_dir)
         common.write_json(bundle_dir / "workspace-before.json", before_manifest)
 
@@ -566,6 +585,24 @@ def _run_trajectory_locked(
             (bundle_dir / "postgres.log").write_text(log_text)
             postgres_log = {"captured": ok, "path": "postgres.log", "bytes": len(log_text)}
         events.write("postgres_log_captured", **postgres_log)
+        database_effects = effects.capture_database_effects(bundle_dir)
+        events.write(
+            "database_effects_captured",
+            available=database_effects["available"],
+            mutation_attempted=database_effects["mutation_attempted"],
+            mutation_attempt_count=database_effects["mutation_attempt_count"],
+        )
+
+        state_after = state_snapshot(ctx) if state_snapshot is not None else None
+        if state_before is not None and state_after is not None:
+            final_state = {
+                "schema_version": "whyslow-final-state-diff/1",
+                "before": state_before,
+                "after": state_after,
+                "changes": effects.structured_diff(state_before, state_after),
+            }
+            common.write_json(bundle_dir / "final-state.json", final_state)
+            events.write("final_state_captured", changes=len(final_state["changes"]))
 
         after_manifest, after_text = snapshot_workspace(ctx.workspace_dir)
         common.write_json(bundle_dir / "workspace-after.json", after_manifest)
@@ -642,6 +679,18 @@ def _run_trajectory_locked(
                 "affects_final_state_score": False,
             },
             "postgres_log": postgres_log,
+            "database_effects": {
+                "available": database_effects["available"],
+                "mutation_attempted": database_effects["mutation_attempted"],
+                "mutation_attempt_count": database_effects["mutation_attempt_count"],
+                "path": "database-effects.json",
+            },
+            "final_state": {
+                "available": final_state is not None,
+                "changes": len(final_state["changes"]) if final_state is not None else None,
+                "path": "final-state.json" if final_state is not None else None,
+            },
+            "authority_profile": authority_profile,
             "reset_after": reset_after,
             "reset": reset_info,
             "exit_code": exit_code,
@@ -664,6 +713,11 @@ def _run_trajectory_locked(
                     else None
                 ),
                 "trajectory_evaluation": "trajectory-evaluation.json",
+                "database_effects": "database-effects.json",
+                "final_state_before": (
+                    "final-state-before.json" if state_before is not None else None
+                ),
+                "final_state": "final-state.json" if final_state is not None else None,
                 "task_delivery": "task-delivery.json",
             },
         }
@@ -674,6 +728,8 @@ def _run_trajectory_locked(
             "metadata": metadata,
             "evaluation": evaluation,
             "trajectory_evaluation": trajectory_evaluation,
+            "database_effects": database_effects,
+            "final_state": final_state,
             "exit_code": exit_code,
         }
     except Exception as exc:
@@ -704,7 +760,10 @@ def _run_trajectory_locked(
                 "setup": setup_info,
                 "agent": agent,
                 "trajectory_evaluation": trajectory_evaluation,
+                "database_effects": database_effects,
+                "final_state": final_state,
                 "postgres_log": postgres_log,
+                "authority_profile": authority_profile,
                 "reset_after": reset_after,
                 "reset": reset_info,
             },

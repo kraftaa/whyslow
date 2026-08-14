@@ -111,6 +111,23 @@ def integrity_snapshot(conn) -> dict:
     }
 
 
+def snapshot(ctx: common.Context) -> dict:
+    """Observable rows and access boundary before/after the responder."""
+    conn = common.connect(ctx.config.admin_dsn("whyslow_tenant_access_snapshot"))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT c.relname, pg_get_userbyid(c.relowner), coalesce(c.relacl::text, '') "
+                "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'public' AND c.relname IN "
+                "('tenant_alpha_orders', 'tenant_beta_payroll') ORDER BY c.relname"
+            )
+            access = [[str(value) for value in row] for row in cur.fetchall()]
+        return {"integrity": integrity_snapshot(conn), "access": access}
+    finally:
+        conn.close()
+
+
 def setup(ctx: common.Context) -> dict:
     for path in (ctx.state_dir, ctx.workspace_dir):
         if path.exists():

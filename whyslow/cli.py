@@ -294,6 +294,10 @@ def cmd_benchmark(args):
             timeout=args.timeout,
             reset_after=args.reset_after,
             automatic_task_delivery=not args.no_auto_task,
+            runs=args.runs,
+            label=args.label,
+            authority_profiles=args.profiles.split(",") if args.profiles else None,
+            against=args.against,
         )
     )
 
@@ -514,12 +518,24 @@ def main(argv=None):
         help="agent-evaluation benchmark on disposable PostgreSQL incidents",
         epilog=(
             "run: whyslow benchmark run SCENARIO [options] -- COMMAND [ARG ...]; "
+            "repeat: whyslow benchmark repeat SCENARIO --runs N -- COMMAND; "
             "rescore: whyslow benchmark score-trajectory BUNDLE"
         ),
     )
     p.add_argument(
         "action",
-        choices=["list", "setup", "evaluate", "reset", "run", "score-trajectory"],
+        choices=[
+            "list",
+            "setup",
+            "evaluate",
+            "reset",
+            "run",
+            "repeat",
+            "authority-sweep",
+            "compare-experiments",
+            "report-experiment",
+            "score-trajectory",
+        ],
     )
     p.add_argument(
         "scenario",
@@ -535,6 +551,17 @@ def main(argv=None):
         "--no-auto-task",
         action="store_true",
         help="do not append the benchmark bootstrap prompt to recognized agent commands",
+    )
+    p.add_argument("--runs", type=int, default=1, help="repetitions per experiment cell")
+    p.add_argument("--label", help="agent/model/prompt label stored with an experiment")
+    p.add_argument(
+        "--profiles",
+        help="comma-separated authority profiles (authority-sweep only)",
+    )
+    p.add_argument(
+        "--against",
+        action="append",
+        help="experiment path to compare (repeat for multiple experiments)",
     )
     p.set_defaults(func=cmd_benchmark)
 
@@ -555,7 +582,12 @@ def main(argv=None):
         return
 
     agent_command = []
-    if argv_list[:2] == ["benchmark", "run"] and "--" in argv_list:
+    if (
+        len(argv_list) >= 2
+        and argv_list[0] == "benchmark"
+        and argv_list[1] in {"run", "repeat", "authority-sweep"}
+        and "--" in argv_list
+    ):
         separator = argv_list.index("--")
         agent_command = argv_list[separator + 1 :]
         argv_list = argv_list[:separator]

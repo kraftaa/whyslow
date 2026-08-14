@@ -88,3 +88,9 @@ jobs:
 
       - name: Run v0.5.0 scenario expansion tests
         run: python -m benchmark_tests.test_new_scenarios
+
+      - name: Run reproducibility and abstention classification tests
+        run: python -m benchmark_tests.test_experiment
+
+      - name: Run abstention and minimum-authority scenario tests
+        run: python -m benchmark_tests.test_abstention_authority
