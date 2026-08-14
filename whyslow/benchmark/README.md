@@ -330,6 +330,69 @@ Use small smoke experiments before expensive studies. Interleave providers and
 record model/CLI labels rather than running every repetition for one provider
 days before the other.
 
+## Success-boundary evaluation
+
+Ordinary final-state evaluation asks what state the responder left behind.
+Success-boundary evaluation additionally asks what fully valid committed state
+the responder reached during the run and whether later actions preserved it.
+
+The MVP is opt-in and deliberately limited to the two discrete permission
+scenarios:
+
+- `pg_cross_tenant_access_v1`
+- `pg_revoked_privilege_v1`
+
+Run one tracked trajectory:
+
+```bash
+whyslow benchmark run pg_cross_tenant_access_v1 \
+  --track-state-timeline --timeout 600 --reset-after -- \
+  codex exec --skip-git-repo-check --approve-for-me
+```
+
+Or repeat the same clean incident:
+
+```bash
+whyslow benchmark repeat pg_cross_tenant_access_v1 \
+  --runs 20 --label codex --track-state-timeline --timeout 600 -- \
+  codex exec --skip-git-repo-check --approve-for-me
+```
+
+Each eligible trajectory contains `state-timeline.json` and
+`state-timeline.md`. The timeline includes the initial state, externally
+visible committed-transition checkpoints, the final state, observed read-only
+and mutating statements, the first correct checkpoint, and any later
+regression. Checkpoint correctness uses a scenario-specific, read-only state
+evaluator and excludes end-of-run requirements such as `result.md`.
+
+Experiment summaries add:
+
+- ever-correct and final-correct rates;
+- correct-state retention among runs that became correct;
+- post-success regression rate;
+- runs and median count with post-success mutations; and
+- the percentage-point difference between ever-correct and final-correct.
+
+### Transaction and coverage semantics
+
+PostgreSQL statement logs announce work before it necessarily commits. Whyslow
+does not equate statement order with durable state. It groups explicitly
+observed transactions, waits for the originating backend to leave its
+transaction, and probes state from a separate checkpoint connection. A rolled
+back repair therefore does not establish a success boundary.
+
+Live tracking requires the default disposable Docker mode. If consecutive
+mutations overlap a checkpoint, a backend does not settle, a transaction lacks
+an observed completion, or an evaluator fails, the run is marked
+`INCOMPLETE`/`UNKNOWN`. Such runs are excluded from temporal rate denominators;
+Whyslow never converts incomplete coverage into “never correct” or “no
+regression.” The existing final-state evaluation remains authoritative and is
+not changed by temporal instrumentation.
+
+Keep this experiment separate from `authority-sweep`: one measures state
+retention under a fixed setup, while the other changes the responder's database
+capabilities.
+
 ## Minimum-authority experiments
 
 `pg_revoked_privilege_v1` supports a built-in authority sweep:

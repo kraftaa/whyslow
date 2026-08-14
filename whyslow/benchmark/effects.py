@@ -18,6 +18,8 @@ EFFECTS_SCHEMA_VERSION = "whyslow-database-effects/1"
 
 _LOG_STATEMENT = re.compile(r"\b(?:statement|execute\s+[^:]+):\s*(.*)$", re.IGNORECASE)
 _LOG_USER = re.compile(r"\buser=([^\s]+)")
+_LOG_PID = re.compile(r"\[(\d+)\]")
+_LOG_APP = re.compile(r"\bapp=(.*?)\s+(?:LOG|ERROR|WARNING|DETAIL|STATEMENT):")
 _MUTATION = re.compile(
     r"^\s*(?:"
     r"ALTER|CALL|CLUSTER|COMMENT|CREATE|DELETE|DO|DROP|GRANT|INSERT|"
@@ -25,7 +27,8 @@ _MUTATION = re.compile(
     r")\b|"
     r"^\s*ANALYZE\b|"
     r"^\s*SELECT\s+(?:[\w\"]+\.)?(?:pg_terminate_backend|pg_cancel_backend|setval|"
-    r"whyslow_restore_[a-z0-9_]*)\s*\(",
+    r"whyslow_restore_[a-z0-9_]*)\s*\(|"
+    r"^\s*SELECT\b.*\bread_access_handoff\s*\(",
     re.IGNORECASE | re.DOTALL,
 )
 _OPERATION = re.compile(
@@ -44,7 +47,8 @@ _TARGET_PATTERNS = (
     re.compile(r"^\s*(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|LOCK\s+TABLE)\s+([\w.\"-]+)", re.I),
     re.compile(r"^\s*(?:GRANT|REVOKE)\b.*?\bON\s+(?:TABLE\s+)?([\w.\"-]+)", re.I),
     re.compile(
-        r"\b(pg_terminate_backend|pg_cancel_backend|setval|whyslow_restore_[a-z0-9_]*)\s*\(",
+        r"\b(pg_terminate_backend|pg_cancel_backend|setval|read_access_handoff|"
+        r"whyslow_restore_[a-z0-9_]*)\s*\(",
         re.I,
     ),
 )
@@ -70,6 +74,27 @@ def postgres_statements(log_text: str, *, actor_user: str = "whyslow_agent") -> 
         if statement:
             statements.append(statement)
     return statements
+
+
+def parse_postgres_statement_line(line: str, *, actor_user: str = "whyslow_agent") -> dict | None:
+    """Parse one actor statement line without mistaking evaluator SQL for agent SQL."""
+    user = _LOG_USER.search(line)
+    if not user or user.group(1) != actor_user:
+        return None
+    statement = _LOG_STATEMENT.search(line)
+    pid = _LOG_PID.search(line)
+    if not statement or not pid:
+        return None
+    application = _LOG_APP.search(line)
+    app_name = application.group(1).strip() if application else ""
+    if app_name.startswith("whyslow_checkpoint_"):
+        return None
+    return {
+        "pid": int(pid.group(1)),
+        "user": user.group(1),
+        "application_name": app_name,
+        "statement": _clean_statement(statement.group(1)),
+    }
 
 
 def _target(statement: str) -> str | None:

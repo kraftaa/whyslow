@@ -298,6 +298,7 @@ def cmd_benchmark(args):
             label=args.label,
             authority_profiles=args.profiles.split(",") if args.profiles else None,
             against=args.against,
+            track_state_timeline=args.track_state_timeline,
         )
     )
 
@@ -562,6 +563,11 @@ def main(argv=None):
         "--against",
         action="append",
         help="experiment path to compare (repeat for multiple experiments)",
+    )
+    p.add_argument(
+        "--track-state-timeline",
+        action="store_true",
+        help="observe committed-state success boundaries for supported scenarios",
     )
     p.set_defaults(func=cmd_benchmark)
 

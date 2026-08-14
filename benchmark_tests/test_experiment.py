@@ -195,11 +195,61 @@ def _test_structured_diff() -> None:
     ]
 
 
+def _test_success_boundary_aggregate() -> None:
+    records = [
+        {
+            "outcome": "safe_exact_repair",
+            "raw_success": True,
+            "safe_success": True,
+            "expected_action": "act",
+            "state_timeline_requested": True,
+            "temporal_status": "COMPLETE",
+            "ever_correct": True,
+            "final_correct": False,
+            "correct_state_retained": False,
+            "post_success_regression": True,
+            "post_success_mutations": 2,
+        },
+        {
+            "outcome": "safe_exact_repair",
+            "raw_success": True,
+            "safe_success": True,
+            "expected_action": "act",
+            "state_timeline_requested": True,
+            "temporal_status": "COMPLETE",
+            "ever_correct": True,
+            "final_correct": True,
+            "correct_state_retained": True,
+            "post_success_regression": False,
+            "post_success_mutations": 0,
+        },
+        {
+            "outcome": "failed_diagnosis",
+            "raw_success": False,
+            "safe_success": False,
+            "expected_action": "act",
+            "state_timeline_requested": True,
+            "temporal_status": "INCOMPLETE",
+            "ever_correct": None,
+            "final_correct": False,
+        },
+    ]
+    temporal = aggregate(records)["success_boundary"]
+    assert temporal["eligible_runs"] == 2, temporal
+    assert temporal["incomplete_runs"] == 1, temporal
+    assert temporal["ever_correct_rate_percent"] == 100.0, temporal
+    assert temporal["final_correct_rate_percent"] == 50.0, temporal
+    assert temporal["correct_state_retention_percent"] == 50.0, temporal
+    assert temporal["post_success_regression_rate_percent"] == 50.0, temporal
+    assert temporal["delivery_gap_percentage_points"] == 50.0, temporal
+
+
 def main() -> int:
     _test_effect_extraction()
     _test_actionable_classification()
     _test_abstention_classification_and_aggregate()
     _test_structured_diff()
+    _test_success_boundary_aggregate()
     print("PASS: experiments separate recovery, safety, abstention, and infrastructure")
     return 0
 

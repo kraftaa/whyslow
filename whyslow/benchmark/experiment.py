@@ -211,6 +211,28 @@ def aggregate(records: list[dict]) -> dict:
         for record in completed
         if isinstance(record.get("approval_requests"), int)
     ]
+    temporal_requested = any(record.get("state_timeline_requested") for record in records)
+    temporal_eligible = [
+        record for record in completed if record.get("temporal_status") == "COMPLETE"
+    ]
+    ever_correct = sum(record.get("ever_correct") is True for record in temporal_eligible)
+    final_correct = sum(record.get("final_correct") is True for record in temporal_eligible)
+    retained = sum(
+        record.get("correct_state_retained") is True
+        for record in temporal_eligible
+        if record.get("ever_correct") is True
+    )
+    regressed = sum(
+        record.get("post_success_regression") is True
+        for record in temporal_eligible
+        if record.get("ever_correct") is True
+    )
+    ever_records = [record for record in temporal_eligible if record.get("ever_correct") is True]
+    post_success_mutations = [
+        int(record.get("post_success_mutations") or 0) for record in ever_records
+    ]
+    ever_rate = _percent(ever_correct, len(temporal_eligible))
+    final_rate = _percent(final_correct, len(temporal_eligible))
     return {
         "runs_requested": len(records),
         "runs_completed": len(completed),
@@ -227,6 +249,33 @@ def aggregate(records: list[dict]) -> dict:
             "runs": len(abstention),
             "unjustified_interventions": unjustified,
             "unjustified_action_rate_percent": _percent(unjustified, len(abstention)),
+        },
+        "success_boundary": {
+            "requested": temporal_requested,
+            "eligible_runs": len(temporal_eligible),
+            "incomplete_runs": sum(
+                bool(record.get("state_timeline_requested"))
+                and record.get("temporal_status") != "COMPLETE"
+                for record in completed
+            ),
+            "ever_correct_runs": ever_correct,
+            "ever_correct_rate_percent": ever_rate,
+            "final_correct_runs": final_correct,
+            "final_correct_rate_percent": final_rate,
+            "correct_state_retention_percent": _percent(retained, len(ever_records)),
+            "post_success_regression_runs": regressed,
+            "post_success_regression_rate_percent": _percent(regressed, len(ever_records)),
+            "runs_with_post_success_mutations": sum(value > 0 for value in post_success_mutations),
+            "median_post_success_mutations": (
+                round(statistics.median(post_success_mutations), 1)
+                if post_success_mutations
+                else None
+            ),
+            "delivery_gap_percentage_points": (
+                round(ever_rate - final_rate, 1)
+                if ever_rate is not None and final_rate is not None
+                else None
+            ),
         },
         "duration_seconds": {
             "median": round(statistics.median(durations), 3) if durations else None,
@@ -303,6 +352,28 @@ def _report_markdown(document: dict) -> str:
             f"- Final-state diff entries: {behavior['final_state_changes']}",
         ]
     )
+    temporal = aggregate_result["success_boundary"]
+    if temporal["requested"]:
+        lines.extend(
+            [
+                "",
+                "## Success-boundary evaluation",
+                "",
+                f"- Eligible runs: {temporal['eligible_runs']}",
+                f"- Incomplete/unsupported runs: {temporal['incomplete_runs']}",
+                f"- Ever correct: {temporal['ever_correct_runs']}/{temporal['eligible_runs']} "
+                f"({_rate_text(temporal['ever_correct_rate_percent'])})",
+                f"- Final correct: {temporal['final_correct_runs']}/{temporal['eligible_runs']} "
+                f"({_rate_text(temporal['final_correct_rate_percent'])})",
+                "- Correct-state retention: "
+                f"{_rate_text(temporal['correct_state_retention_percent'])}",
+                "- Post-success regression: "
+                f"{_rate_text(temporal['post_success_regression_rate_percent'])}",
+                f"- Median post-success mutations: {temporal['median_post_success_mutations']}",
+                "- Ever-correct minus final-correct: "
+                f"{temporal['delivery_gap_percentage_points']} percentage point(s)",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -360,6 +431,7 @@ def run_repeated(
     timeout: float,
     automatic_task_delivery: bool,
     authority_profiles: list[str] | None = None,
+    track_state_timeline: bool = False,
 ) -> dict:
     if runs < 1:
         raise ValueError("runs must be at least 1")
@@ -380,6 +452,7 @@ def run_repeated(
         "command": command,
         "runs_per_profile": runs,
         "authority_profiles": profiles,
+        "track_state_timeline": track_state_timeline,
         "started_at": _utc_now(),
         "ended_at": None,
         "status": "running",
@@ -401,10 +474,13 @@ def run_repeated(
                     reset_after=True,
                     automatic_task_delivery=automatic_task_delivery,
                     authority_profile=profile,
+                    track_state_timeline=track_state_timeline,
                 )
                 outcome = classify_summary(summary, scenario_module.METADATA)
                 trajectory_metrics = summary["trajectory_evaluation"].get("metrics", {})
                 final_state = summary.get("final_state") or {}
+                state_timeline = summary.get("state_timeline") or {}
+                temporal = state_timeline.get("analysis", {})
                 record = {
                     "index": index,
                     "repetition": repetition,
@@ -427,6 +503,14 @@ def run_repeated(
                     "operations": summary["database_effects"].get("operations", []),
                     "objects_touched": summary["database_effects"].get("objects_touched", []),
                     "final_state_changes": len(final_state.get("changes", [])),
+                    "state_timeline_requested": track_state_timeline,
+                    "temporal_status": temporal.get("temporal_status"),
+                    "ever_correct": temporal.get("ever_correct"),
+                    "final_correct": temporal.get("final_correct"),
+                    "correct_state_retained": temporal.get("correct_state_retained"),
+                    "post_success_regression": temporal.get("post_success_regression"),
+                    "post_success_reads": temporal.get("post_success_reads"),
+                    "post_success_mutations": temporal.get("post_success_mutations"),
                     "usage": summary["trajectory_evaluation"].get("usage"),
                     **outcome,
                 }
@@ -438,6 +522,8 @@ def run_repeated(
                     "authority_profile": profile,
                     "bundle": None,
                     "duration_seconds": round(time.monotonic() - started, 3),
+                    "state_timeline_requested": track_state_timeline,
+                    "temporal_status": "ERROR" if track_state_timeline else None,
                     **classify_summary(
                         {"status": "error", "error": f"{type(exc).__name__}: {exc}"},
                         scenario_module.METADATA,
@@ -491,6 +577,7 @@ def compare_experiments(documents: list[dict]) -> dict:
                 ],
                 "median_duration_seconds": result["duration_seconds"]["median"],
                 "outcomes": result["outcomes"],
+                "success_boundary": result.get("success_boundary"),
             }
         )
     return {"schema_version": "whyslow-experiment-comparison/1", "experiments": rows}
@@ -511,4 +598,29 @@ def comparison_markdown(comparison: dict) -> str:
             f"{str(unjustified) + '%' if unjustified is not None else 'N/A'} | "
             f"{row['median_duration_seconds']} |"
         )
+    temporal_rows = [
+        row for row in comparison["experiments"] if row.get("success_boundary", {}).get("requested")
+    ]
+    if len(temporal_rows) == len(comparison["experiments"]):
+        lines.extend(
+            [
+                "",
+                "## Success-boundary evaluation",
+                "",
+                "| Label | Eligible | Ever correct | Final correct | Retention | Regression | Median post-success mutations |",
+                "|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for row in temporal_rows:
+            temporal = row["success_boundary"]
+            lines.append(
+                f"| {row['label']} | {temporal['eligible_runs']} | "
+                f"{_rate_text(temporal['ever_correct_rate_percent'])} | "
+                f"{_rate_text(temporal['final_correct_rate_percent'])} | "
+                f"{_rate_text(temporal['correct_state_retention_percent'])} | "
+                f"{_rate_text(temporal['post_success_regression_rate_percent'])} | "
+                f"{temporal['median_post_success_mutations']} |"
+            )
+    elif temporal_rows:
+        lines.extend(["", "Success-boundary evaluation: unavailable for one or more inputs."])
     return "\n".join(lines) + "\n"

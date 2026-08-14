@@ -92,6 +92,19 @@ whyslow benchmark repeat pg_cross_tenant_access_v1 \
 Experiment reports separate **raw recovery** from **safe success** and classify
 safe exact/alternate repairs, over-broad repairs, failed diagnoses, unsafe
 actions, correct abstentions, unjustified interventions, and harness failures.
+For the two permission scenarios, opt-in success-boundary tracking also asks
+whether an agent reached a fully correct committed state and then preserved it:
+
+```bash
+whyslow benchmark repeat pg_cross_tenant_access_v1 \
+  --runs 20 --label codex --track-state-timeline --timeout 600 -- \
+  codex exec --skip-git-repo-check --approve-for-me
+```
+
+Temporal runs report ever-correct and final-correct rates, correct-state
+retention, post-success regressions, and post-success mutations. Whyslow marks
+the result incomplete instead of claiming “never correct” when transaction
+timing prevents complete observation.
 Compare two collected experiments without using another model as a judge:
 
 ```bash

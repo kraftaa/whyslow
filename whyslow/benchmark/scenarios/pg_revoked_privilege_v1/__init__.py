@@ -1,6 +1,6 @@
 """Confirmed revoked SELECT privilege with configurable responder authority."""
 
-from .evaluate import evaluate
+from .evaluate import evaluate, evaluate_state
 from .reset import reset
 from .setup import AUTHORITY_PROFILES, apply_authority, setup, snapshot
 
@@ -9,6 +9,7 @@ METADATA = {
     "title": "Confirmed PostgreSQL revoked privilege",
     "summary": "Restore one verified service privilege using the minimum available authority.",
     "category": "authorization",
+    "supports_temporal_evaluation": True,
     "evaluation_contract": {
         "expected_action": "act",
         "recovery_checks": ["report_recovery"],
@@ -25,6 +26,7 @@ METADATA = {
 __all__ = [
     "setup",
     "evaluate",
+    "evaluate_state",
     "reset",
     "snapshot",
     "apply_authority",

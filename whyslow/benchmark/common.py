@@ -224,6 +224,37 @@ def compose_logs(*, since: str) -> tuple[bool, str]:
     return result.returncode == 0, output
 
 
+def compose_log_follower(*, since: str) -> subprocess.Popen:
+    """Stream timestamped database logs for live benchmark instrumentation."""
+    return subprocess.Popen(
+        _compose_base()
+        + ["logs", "--no-color", "--timestamps", "--follow", "--since", since, "db"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+
+def backend_transaction_settled(config: DsnConfig, pid: int) -> bool:
+    """Return true once a backend has no externally invisible transaction work."""
+    conn = connect(config.admin_dsn("whyslow_checkpoint_backend_probe"), connect_timeout=2)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT state, xact_start IS NULL
+                FROM pg_stat_activity
+                WHERE pid = %s AND datname = %s
+                """,
+                (pid, config.dbname),
+            )
+            row = cur.fetchone()
+        return row is None or (row[0] == "idle" and bool(row[1]))
+    finally:
+        conn.close()
+
+
 def process_cmdline(pid: int) -> str | None:
     """Best-effort command line for a pid, used to confirm a pid is still one
     of our actors before signalling it (guards against pid reuse)."""

@@ -141,6 +141,18 @@ def _print_experiment(document: dict) -> None:
             f"{abstention['unjustified_interventions']}/{abstention['runs']} "
             f"({_rate(abstention['unjustified_action_rate_percent'])})"
         )
+    temporal = result.get("success_boundary", {})
+    if temporal.get("requested"):
+        print(
+            "  success boundary: "
+            f"{temporal['ever_correct_runs']}/{temporal['eligible_runs']} ever-correct; "
+            f"{temporal['final_correct_runs']}/{temporal['eligible_runs']} final-correct"
+        )
+        print(
+            "  correct-state retention: "
+            f"{_rate(temporal.get('correct_state_retention_percent'))}; "
+            f"incomplete {temporal['incomplete_runs']}"
+        )
     print(f"  → experiment: {document['path']}")
     print(f"  → report: {document['path']}/report.md")
 
@@ -158,6 +170,7 @@ def run(
     label: str | None = None,
     authority_profiles: list[str] | None = None,
     against: list[str] | None = None,
+    track_state_timeline: bool = False,
 ) -> int:
     if action == "list":
         for sid in sorted(SCENARIOS):
@@ -234,6 +247,10 @@ def run(
 
         profiles = None
         if action == "authority-sweep":
+            if track_state_timeline:
+                raise SystemExit(
+                    "--track-state-timeline is intentionally separate from authority-sweep"
+                )
             available = list(getattr(module, "AUTHORITY_PROFILES", []))
             if not available:
                 raise SystemExit(f"scenario {scenario!r} has no authority profiles")
@@ -253,6 +270,7 @@ def run(
             timeout=timeout,
             automatic_task_delivery=automatic_task_delivery,
             authority_profiles=profiles,
+            track_state_timeline=track_state_timeline,
         )
         if json_output:
             print(json.dumps(document, indent=2))
@@ -282,6 +300,7 @@ def run(
             timeout=timeout,
             reset_after=reset_after,
             automatic_task_delivery=automatic_task_delivery,
+            track_state_timeline=track_state_timeline,
         )
         if json_output:
             print(json.dumps(summary, indent=2))
@@ -289,6 +308,17 @@ def run(
             print()
             _print_evaluate(summary["evaluation"])
             _print_trajectory(summary["trajectory_evaluation"])
+            temporal = summary.get("state_timeline")
+            if temporal is not None:
+                analysis = temporal["analysis"]
+                print(
+                    "[success-boundary] "
+                    f"{analysis['temporal_status']}: ever-correct="
+                    f"{analysis.get('ever_correct')}, final-correct="
+                    f"{analysis.get('final_correct')}, regression="
+                    f"{analysis.get('post_success_regression')}"
+                )
+                print(f"  → state timeline: {summary['bundle']}/state-timeline.md")
             delivery = summary["metadata"]["agent"].get("task_delivery", {})
             if delivery.get("prompt_injected"):
                 print(
@@ -385,6 +415,11 @@ def main(argv=None) -> int:
         action="append",
         help="experiment path to compare (repeat for multiple experiments)",
     )
+    parser.add_argument(
+        "--track-state-timeline",
+        action="store_true",
+        help="observe committed-state success boundaries for supported scenarios",
+    )
     argv_list = list(sys.argv[1:] if argv is None else argv)
     command = []
     if argv_list[:1] and argv_list[0] in {"run", "repeat", "authority-sweep"} and "--" in argv_list:
@@ -403,6 +438,7 @@ def main(argv=None) -> int:
         label=args.label,
         authority_profiles=args.profiles.split(",") if args.profiles else None,
         against=args.against,
+        track_state_timeline=args.track_state_timeline,
     )
 
 
