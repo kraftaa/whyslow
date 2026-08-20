@@ -28,6 +28,8 @@ import platform
 from whyslow import __version__
 from . import common
 from . import agent_timeline
+from . import effects
+from . import state_timeline as state_timeline_mod
 from . import trajectory_score
 
 SCHEMA_VERSION = "whyslow-trajectory/1"
@@ -279,6 +281,7 @@ def _capture_noninteractive(
     finally:
         selector.close()
         _stop_process_group(proc, grace_seconds=0.2)
+        proc.stdout.close()
     return int(proc.returncode if proc.returncode is not None else -1), timed_out
 
 
@@ -483,6 +486,7 @@ def _agent_environment(
             "PGDATABASE": ctx.config.dbname,
             "PGUSER": common.AGENT_USER,
             "PGPASSWORD": common.AGENT_PASSWORD,
+            "PGAPPNAME": f"whyslow_agent_{run_id}",
             "WHYSLOW_BENCH_SCENARIO": ctx.scenario_id,
             "WHYSLOW_BENCH_RUN_ID": run_id,
             "WHYSLOW_BENCH_WORKSPACE": str(ctx.workspace_dir),
@@ -500,6 +504,8 @@ def run_trajectory(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     reset_after: bool = False,
     automatic_task_delivery: bool = True,
+    authority_profile: str | None = None,
+    track_state_timeline: bool = False,
 ) -> dict:
     """Run one scenario while exclusively owning its shared local environment."""
     with benchmark_run_lock(ctx):
@@ -510,6 +516,8 @@ def run_trajectory(
             timeout=timeout,
             reset_after=reset_after,
             automatic_task_delivery=automatic_task_delivery,
+            authority_profile=authority_profile,
+            track_state_timeline=track_state_timeline,
         )
 
 
@@ -521,6 +529,8 @@ def _run_trajectory_locked(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     reset_after: bool = False,
     automatic_task_delivery: bool = True,
+    authority_profile: str | None = None,
+    track_state_timeline: bool = False,
 ) -> dict:
     """Set up, run, capture, evaluate, and optionally reset one scenario."""
     if timeout <= 0:
@@ -535,12 +545,29 @@ def _run_trajectory_locked(
     agent = None
     evaluation = None
     trajectory_evaluation = None
+    database_effects = None
+    final_state = None
+    state_timeline = None
+    live_state_tracker = None
     reset_info = None
     postgres_log = {"captured": False, "reason": "agent did not run"}
     try:
         events.write("setup_started", scenario=ctx.scenario_id, run_id=run_id)
         setup_info = scenario_module.setup(ctx)
         events.write("setup_finished", setup=setup_info)
+        if authority_profile is not None:
+            apply_authority = getattr(scenario_module, "apply_authority", None)
+            if apply_authority is None:
+                raise ValueError(
+                    f"scenario {ctx.scenario_id!r} does not support authority profiles"
+                )
+            authority_info = apply_authority(ctx, authority_profile)
+            setup_info = {**setup_info, "authority": authority_info}
+            events.write("authority_applied", profile=authority_profile, details=authority_info)
+        state_snapshot = getattr(scenario_module, "snapshot", None)
+        state_before = state_snapshot(ctx) if state_snapshot is not None else None
+        if state_before is not None:
+            common.write_json(bundle_dir / "final-state-before.json", state_before)
         before_manifest, before_text = snapshot_workspace(ctx.workspace_dir)
         common.write_json(bundle_dir / "workspace-before.json", before_manifest)
 
@@ -549,6 +576,24 @@ def _run_trajectory_locked(
         )
         common.write_json(bundle_dir / "task-delivery.json", task_delivery)
         events.write("task_delivered", **task_delivery)
+
+        if track_state_timeline:
+            if not common.use_docker():
+                state_timeline = state_timeline_mod.unavailable_timeline(
+                    ctx.scenario_id,
+                    "live committed-transition tracking requires Docker benchmark mode",
+                )
+            elif not scenario_module.METADATA.get("supports_temporal_evaluation") or not hasattr(
+                scenario_module, "evaluate_state"
+            ):
+                state_timeline = state_timeline_mod.unavailable_timeline(
+                    ctx.scenario_id,
+                    "scenario has no state-only temporal evaluator",
+                )
+            else:
+                live_state_tracker = state_timeline_mod.LiveStateTimeline(scenario_module, ctx)
+                live_state_tracker.start()
+                events.write("state_timeline_started")
 
         agent = capture_command(
             launched_command,
@@ -560,12 +605,44 @@ def _run_trajectory_locked(
             task_delivery=task_delivery,
         )
 
+        if live_state_tracker is not None:
+            state_timeline = live_state_tracker.stop()
+            live_state_tracker = None
+            events.write(
+                "state_timeline_finished",
+                temporal_status=state_timeline["analysis"]["temporal_status"],
+                checkpoints=len(state_timeline["checkpoints"]),
+            )
+        if state_timeline is not None:
+            common.write_json(bundle_dir / "state-timeline.json", state_timeline)
+            (bundle_dir / "state-timeline.md").write_text(
+                state_timeline_mod.timeline_markdown(state_timeline)
+            )
+
         postgres_log = {"captured": False, "reason": "non-Docker benchmark mode"}
         if common.use_docker():
             ok, log_text = common.compose_logs(since=agent["started_at"])
             (bundle_dir / "postgres.log").write_text(log_text)
             postgres_log = {"captured": ok, "path": "postgres.log", "bytes": len(log_text)}
         events.write("postgres_log_captured", **postgres_log)
+        database_effects = effects.capture_database_effects(bundle_dir)
+        events.write(
+            "database_effects_captured",
+            available=database_effects["available"],
+            mutation_attempted=database_effects["mutation_attempted"],
+            mutation_attempt_count=database_effects["mutation_attempt_count"],
+        )
+
+        state_after = state_snapshot(ctx) if state_snapshot is not None else None
+        if state_before is not None and state_after is not None:
+            final_state = {
+                "schema_version": "whyslow-final-state-diff/1",
+                "before": state_before,
+                "after": state_after,
+                "changes": effects.structured_diff(state_before, state_after),
+            }
+            common.write_json(bundle_dir / "final-state.json", final_state)
+            events.write("final_state_captured", changes=len(final_state["changes"]))
 
         after_manifest, after_text = snapshot_workspace(ctx.workspace_dir)
         common.write_json(bundle_dir / "workspace-after.json", after_manifest)
@@ -578,6 +655,12 @@ def _run_trajectory_locked(
 
         events.write("evaluation_started")
         evaluation = scenario_module.evaluate(ctx)
+        if state_timeline is not None:
+            state_timeline["analysis"]["final_benchmark_passed"] = bool(evaluation["passed"])
+            common.write_json(bundle_dir / "state-timeline.json", state_timeline)
+            (bundle_dir / "state-timeline.md").write_text(
+                state_timeline_mod.timeline_markdown(state_timeline)
+            )
         common.write_json(bundle_dir / "evaluation.json", evaluation)
         common.write_json(ctx.results_dir / f"{ctx.scenario_id}-{run_id}.json", evaluation)
         report = ctx.workspace_dir / "result.md"
@@ -642,6 +725,28 @@ def _run_trajectory_locked(
                 "affects_final_state_score": False,
             },
             "postgres_log": postgres_log,
+            "database_effects": {
+                "available": database_effects["available"],
+                "mutation_attempted": database_effects["mutation_attempted"],
+                "mutation_attempt_count": database_effects["mutation_attempt_count"],
+                "path": "database-effects.json",
+            },
+            "final_state": {
+                "available": final_state is not None,
+                "changes": len(final_state["changes"]) if final_state is not None else None,
+                "path": "final-state.json" if final_state is not None else None,
+            },
+            "authority_profile": authority_profile,
+            "state_timeline": {
+                "requested": track_state_timeline,
+                "supported": state_timeline.get("supported") if state_timeline else None,
+                "temporal_status": (
+                    state_timeline.get("analysis", {}).get("temporal_status")
+                    if state_timeline
+                    else None
+                ),
+                "path": "state-timeline.json" if state_timeline is not None else None,
+            },
             "reset_after": reset_after,
             "reset": reset_info,
             "exit_code": exit_code,
@@ -664,6 +769,15 @@ def _run_trajectory_locked(
                     else None
                 ),
                 "trajectory_evaluation": "trajectory-evaluation.json",
+                "database_effects": "database-effects.json",
+                "final_state_before": (
+                    "final-state-before.json" if state_before is not None else None
+                ),
+                "final_state": "final-state.json" if final_state is not None else None,
+                "state_timeline": ("state-timeline.json" if state_timeline is not None else None),
+                "state_timeline_markdown": (
+                    "state-timeline.md" if state_timeline is not None else None
+                ),
                 "task_delivery": "task-delivery.json",
             },
         }
@@ -674,6 +788,9 @@ def _run_trajectory_locked(
             "metadata": metadata,
             "evaluation": evaluation,
             "trajectory_evaluation": trajectory_evaluation,
+            "database_effects": database_effects,
+            "final_state": final_state,
+            "state_timeline": state_timeline,
             "exit_code": exit_code,
         }
     except Exception as exc:
@@ -704,11 +821,24 @@ def _run_trajectory_locked(
                 "setup": setup_info,
                 "agent": agent,
                 "trajectory_evaluation": trajectory_evaluation,
+                "database_effects": database_effects,
+                "final_state": final_state,
+                "state_timeline": state_timeline,
                 "postgres_log": postgres_log,
+                "authority_profile": authority_profile,
                 "reset_after": reset_after,
                 "reset": reset_info,
             },
         )
         raise
     finally:
+        if live_state_tracker is not None:
+            try:
+                state_timeline = live_state_tracker.stop()
+                common.write_json(bundle_dir / "state-timeline.json", state_timeline)
+                (bundle_dir / "state-timeline.md").write_text(
+                    state_timeline_mod.timeline_markdown(state_timeline)
+                )
+            except Exception:
+                pass
         events.close()

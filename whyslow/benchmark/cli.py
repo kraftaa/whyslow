@@ -5,7 +5,8 @@ Usable two ways, identically:
     whyslow benchmark <action> <scenario>
     python -m whyslow.benchmark.cli <action> <scenario>
 
-Actions: list | setup | evaluate | reset | run | score-trajectory
+Actions: list | setup | evaluate | reset | run | repeat | authority-sweep |
+         report-experiment | score-trajectory
 """
 
 from __future__ import annotations
@@ -23,12 +24,16 @@ from . import common
 SCENARIOS = {
     "pg_connection_exhaustion_v1": ("whyslow.benchmark.scenarios.pg_connection_exhaustion_v1"),
     "pg_cross_tenant_access_v1": "whyslow.benchmark.scenarios.pg_cross_tenant_access_v1",
+    "pg_cpu_ambiguous_v1": "whyslow.benchmark.scenarios.pg_cpu_ambiguous_v1",
     "pg_invalid_index_v1": "whyslow.benchmark.scenarios.pg_invalid_index_v1",
     "pg_lock_contention_v1": "whyslow.benchmark.scenarios.pg_lock_contention_v1",
     "pg_missing_index_v1": "whyslow.benchmark.scenarios.pg_missing_index_v1",
     "pg_prompt_injection_v1": "whyslow.benchmark.scenarios.pg_prompt_injection_v1",
+    "pg_revoked_privilege_v1": "whyslow.benchmark.scenarios.pg_revoked_privilege_v1",
     "pg_secret_exposure_v1": "whyslow.benchmark.scenarios.pg_secret_exposure_v1",
     "pg_sequence_exhaustion_v1": "whyslow.benchmark.scenarios.pg_sequence_exhaustion_v1",
+    "pg_slow_queries_ambiguous_v1": ("whyslow.benchmark.scenarios.pg_slow_queries_ambiguous_v1"),
+    "pg_stale_data_ambiguous_v1": "whyslow.benchmark.scenarios.pg_stale_data_ambiguous_v1",
     "pg_trigger_latency_v1": "whyslow.benchmark.scenarios.pg_trigger_latency_v1",
 }
 
@@ -107,6 +112,51 @@ def _print_reset(info: dict) -> None:
         print("  ! the benchmark container may still be running; re-run reset.")
 
 
+def _rate(value) -> str:
+    return "N/A" if value is None else f"{value}%"
+
+
+def _print_experiment(document: dict) -> None:
+    result = document["aggregate"]
+    completed = result["runs_completed"]
+
+    print(
+        f"[experiment] {document['scenario']} ({document['label']}): "
+        f"{completed}/{result['runs_requested']} run(s) completed"
+    )
+    print(
+        f"  raw success:  {result['raw_success']['count']}/{completed} "
+        f"({_rate(result['raw_success']['rate_percent'])})"
+    )
+    print(
+        f"  safe success: {result['safe_success']['count']}/{completed} "
+        f"({_rate(result['safe_success']['rate_percent'])})"
+    )
+    for name, count in result["outcomes"].items():
+        print(f"  {name.replace('_', ' '):<28} {count}")
+    abstention = result["abstention"]
+    if abstention["runs"]:
+        print(
+            "  unjustified action rate: "
+            f"{abstention['unjustified_interventions']}/{abstention['runs']} "
+            f"({_rate(abstention['unjustified_action_rate_percent'])})"
+        )
+    temporal = result.get("success_boundary", {})
+    if temporal.get("requested"):
+        print(
+            "  success boundary: "
+            f"{temporal['ever_correct_runs']}/{temporal['eligible_runs']} ever-correct; "
+            f"{temporal['final_correct_runs']}/{temporal['eligible_runs']} final-correct"
+        )
+        print(
+            "  correct-state retention: "
+            f"{_rate(temporal.get('correct_state_retention_percent'))}; "
+            f"incomplete {temporal['incomplete_runs']}"
+        )
+    print(f"  → experiment: {document['path']}")
+    print(f"  → report: {document['path']}/report.md")
+
+
 def run(
     action: str,
     scenario: str | None,
@@ -116,6 +166,11 @@ def run(
     timeout: float = 600.0,
     reset_after: bool = False,
     automatic_task_delivery: bool = True,
+    runs: int = 1,
+    label: str | None = None,
+    authority_profiles: list[str] | None = None,
+    against: list[str] | None = None,
+    track_state_timeline: bool = False,
 ) -> int:
     if action == "list":
         for sid in sorted(SCENARIOS):
@@ -145,11 +200,93 @@ def run(
             print(f"  → wrote {bundle / 'trajectory-evaluation.json'}")
         return 0 if result["available"] else 1
 
+    if action == "report-experiment":
+        if not scenario:
+            raise SystemExit("report-experiment requires an experiment path")
+        from .experiment import load_experiment
+
+        path = Path(scenario).expanduser().resolve()
+        document = load_experiment(path)
+        document["path"] = str(path if path.is_dir() else path.parent)
+        if json_output:
+            print(json.dumps(document, indent=2))
+        else:
+            _print_experiment(document)
+        return 0
+
+    if action == "compare-experiments":
+        if not scenario or not against:
+            raise SystemExit(
+                "compare-experiments requires one experiment path and at least one --against path"
+            )
+        from .experiment import compare_experiments, comparison_markdown, load_experiment
+
+        paths = [scenario, *against]
+        comparison = compare_experiments(
+            [load_experiment(Path(value).expanduser().resolve()) for value in paths]
+        )
+        if json_output:
+            print(json.dumps(comparison, indent=2))
+        else:
+            print(comparison_markdown(comparison), end="")
+        return 0
+
     if not scenario:
         raise SystemExit(f"action {action!r} requires a scenario id (see `benchmark list`)")
 
     module = _load(scenario)
     ctx = common.Context(scenario_id=scenario)
+
+    if action in {"repeat", "authority-sweep"}:
+        if not agent_command:
+            raise SystemExit(f"{action} requires an agent command after `--`")
+        from .experiment import run_repeated
+
+        if runs < 1:
+            raise SystemExit("--runs must be at least 1")
+
+        profiles = None
+        if action == "authority-sweep":
+            if track_state_timeline:
+                raise SystemExit(
+                    "--track-state-timeline is intentionally separate from authority-sweep"
+                )
+            available = list(getattr(module, "AUTHORITY_PROFILES", []))
+            if not available:
+                raise SystemExit(f"scenario {scenario!r} has no authority profiles")
+            profiles = authority_profiles or available
+            unknown = sorted(set(profiles) - set(available))
+            if unknown:
+                raise SystemExit(
+                    f"unknown authority profile(s): {', '.join(unknown)}; "
+                    f"available: {', '.join(available)}"
+                )
+        document = run_repeated(
+            module,
+            scenario,
+            agent_command,
+            runs=runs,
+            label=label or ("authority-sweep" if profiles else "repeat"),
+            timeout=timeout,
+            automatic_task_delivery=automatic_task_delivery,
+            authority_profiles=profiles,
+            track_state_timeline=track_state_timeline,
+        )
+        if json_output:
+            print(json.dumps(document, indent=2))
+        else:
+            _print_experiment(document)
+            if profiles:
+                from .experiment import group_by_authority
+
+                print("  authority profiles:")
+                for profile, result in group_by_authority(document).items():
+                    print(
+                        f"    {profile:<14} safe "
+                        f"{result['safe_success']['count']}/{result['runs_completed']} "
+                        f"({_rate(result['safe_success']['rate_percent'])})"
+                    )
+        return 1 if document["aggregate"]["infrastructure_failures"] else 0
 
     if action == "run":
         if not agent_command:
@@ -163,6 +300,7 @@ def run(
             timeout=timeout,
             reset_after=reset_after,
             automatic_task_delivery=automatic_task_delivery,
+            track_state_timeline=track_state_timeline,
         )
         if json_output:
             print(json.dumps(summary, indent=2))
@@ -170,6 +308,17 @@ def run(
             print()
             _print_evaluate(summary["evaluation"])
             _print_trajectory(summary["trajectory_evaluation"])
+            temporal = summary.get("state_timeline")
+            if temporal is not None:
+                analysis = temporal["analysis"]
+                print(
+                    "[success-boundary] "
+                    f"{analysis['temporal_status']}: ever-correct="
+                    f"{analysis.get('ever_correct')}, final-correct="
+                    f"{analysis.get('final_correct')}, regression="
+                    f"{analysis.get('post_success_regression')}"
+                )
+                print(f"  → state timeline: {summary['bundle']}/state-timeline.md")
             delivery = summary["metadata"]["agent"].get("task_delivery", {})
             if delivery.get("prompt_injected"):
                 print(
@@ -232,7 +381,18 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "action",
-        choices=["list", "setup", "evaluate", "reset", "run", "score-trajectory"],
+        choices=[
+            "list",
+            "setup",
+            "evaluate",
+            "reset",
+            "run",
+            "repeat",
+            "authority-sweep",
+            "compare-experiments",
+            "report-experiment",
+            "score-trajectory",
+        ],
     )
     parser.add_argument(
         "scenario",
@@ -244,9 +404,25 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--reset-after", action="store_true", help="tear down the environment after capture"
     )
+    parser.add_argument("--runs", type=int, default=1, help="repetitions per experiment cell")
+    parser.add_argument("--label", help="agent/model/prompt label stored with an experiment")
+    parser.add_argument(
+        "--profiles",
+        help="comma-separated authority profiles (authority-sweep only)",
+    )
+    parser.add_argument(
+        "--against",
+        action="append",
+        help="experiment path to compare (repeat for multiple experiments)",
+    )
+    parser.add_argument(
+        "--track-state-timeline",
+        action="store_true",
+        help="observe committed-state success boundaries for supported scenarios",
+    )
     argv_list = list(sys.argv[1:] if argv is None else argv)
     command = []
-    if argv_list[:1] == ["run"] and "--" in argv_list:
+    if argv_list[:1] and argv_list[0] in {"run", "repeat", "authority-sweep"} and "--" in argv_list:
         separator = argv_list.index("--")
         command = argv_list[separator + 1 :]
         argv_list = argv_list[:separator]
@@ -258,6 +434,11 @@ def main(argv=None) -> int:
         agent_command=command,
         timeout=args.timeout,
         reset_after=args.reset_after,
+        runs=args.runs,
+        label=args.label,
+        authority_profiles=args.profiles.split(",") if args.profiles else None,
+        against=args.against,
+        track_state_timeline=args.track_state_timeline,
     )
 
 

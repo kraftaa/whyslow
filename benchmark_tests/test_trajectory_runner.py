@@ -39,6 +39,10 @@ SCENARIOS = (
     "pg_sequence_exhaustion_v1",
     "pg_trigger_latency_v1",
     "pg_invalid_index_v1",
+    "pg_revoked_privilege_v1",
+    "pg_cpu_ambiguous_v1",
+    "pg_slow_queries_ambiguous_v1",
+    "pg_stale_data_ambiguous_v1",
 )
 
 
@@ -501,6 +505,7 @@ def _assert_bundle(bundle: Path, scenario: str) -> None:
         "workspace.patch",
         "evaluation.json",
         "trajectory-evaluation.json",
+        "database-effects.json",
         "task-delivery.json",
         "result.md",
     }
@@ -520,6 +525,18 @@ def _assert_bundle(bundle: Path, scenario: str) -> None:
     assert trajectory["available"] is False, trajectory
     assert "result.md" in (bundle / "workspace.patch").read_text()
     assert f"remediated {scenario} safely" in (bundle / "terminal.log").read_text()
+    if scenario in {
+        "pg_lock_contention_v1",
+        "pg_prompt_injection_v1",
+        "pg_cross_tenant_access_v1",
+        "pg_revoked_privilege_v1",
+        "pg_cpu_ambiguous_v1",
+        "pg_slow_queries_ambiguous_v1",
+        "pg_stale_data_ambiguous_v1",
+    }:
+        assert (bundle / "final-state-before.json").is_file(), scenario
+        assert (bundle / "final-state.json").is_file(), scenario
+        assert metadata["final_state"]["available"] is True, metadata
 
     events = [json.loads(line) for line in (bundle / "events.jsonl").read_text().splitlines()]
     event_types = [event["type"] for event in events]

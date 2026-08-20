@@ -16,13 +16,20 @@ whyslow --from 11:42 --to 11:47      # or: whyslow --last 15m
 Install the `whyslow-db` distribution; the command remains `whyslow`:
 
 ```bash
+# macOS or Linux with Homebrew
+brew install kraftaa/tap/whyslow-db
+
+# or, on any supported platform
 pipx install whyslow-db
-# or: python -m pip install whyslow-db
 ```
+
+Use `brew upgrade whyslow-db` or `pipx upgrade whyslow-db` to install a newer
+release. Direct `python -m pip install whyslow-db` also works inside a virtual
+environment.
 
 ## Test database agents before trusting them
 
-With Docker and Docker Compose installed, the package also includes nine
+With Docker and Docker Compose installed, the package also includes thirteen
 reproducible PostgreSQL incidents for evaluating AI agents and humans. Each run
 creates a live but disposable database, lets a responder investigate and act,
 then independently checks what actually changed.
@@ -32,12 +39,15 @@ custom harness, or a human can work on the same task and be evaluated against
 the same hidden ground truth. Codex and Claude Code have built-in command
 timeline adapters; other harnesses can emit the provider-neutral JSONL format.
 
-The nine scenarios cover operational failures and adversarial safety cases:
+The scenarios cover operational failures, adversarial safety cases, and
+evidence-aware abstention:
 
 - lock contention, missing indexes, connection exhaustion, sequence
   exhaustion, trigger latency, and invalid-index recovery;
 - prompt injection hidden in database evidence, synthetic-secret handling,
-  and cross-tenant least-privilege repair.
+  cross-tenant least-privilege repair, and a confirmed revoked privilege;
+- elevated CPU, historical slow queries, and stale-looking data where the
+  available evidence intentionally does not justify mutation.
 
 Evaluators check incident recovery, data integrity, collateral damage, tenant
 isolation, least privilege, unsafe operations, and the observable commands the
@@ -76,6 +86,46 @@ Every structured run produces two independent scores:
   crossing the scenario's security boundary?
 - **Trajectory:** how reliably, efficiently, and safely did the responder get
   there?
+
+Repeat the same clean incident to measure operational reliability instead of
+trusting a single pass:
+
+```bash
+whyslow benchmark repeat pg_cross_tenant_access_v1 \
+  --runs 20 --label codex --timeout 600 -- \
+  codex exec --skip-git-repo-check --approve-for-me
+```
+
+Experiment reports separate **raw recovery** from **safe success** and classify
+safe exact/alternate repairs, over-broad repairs, failed diagnoses, unsafe
+actions, correct abstentions, unjustified interventions, and harness failures.
+For the two permission scenarios, opt-in success-boundary tracking also asks
+whether an agent reached a fully correct committed state and then preserved it:
+
+```bash
+whyslow benchmark repeat pg_cross_tenant_access_v1 \
+  --runs 20 --label codex --track-state-timeline --timeout 600 -- \
+  codex exec --skip-git-repo-check --approve-for-me
+```
+
+Temporal runs report ever-correct and final-correct rates, correct-state
+retention, post-success regressions, and post-success mutations. Whyslow marks
+the result incomplete instead of claiming “never correct” when transaction
+timing prevents complete observation.
+Compare two collected experiments without using another model as a judge:
+
+```bash
+whyslow benchmark compare-experiments EXPERIMENT_A --against EXPERIMENT_B
+```
+
+The confirmed privilege scenario can also sweep five database authority
+profiles to find the lowest capability at which an agent succeeds reliably:
+
+```bash
+whyslow benchmark authority-sweep pg_revoked_privilege_v1 \
+  --runs 10 --label codex -- \
+  codex exec --skip-git-repo-check --approve-for-me
+```
 
 This is a focused PostgreSQL regression pack, not a guarantee of production
 safety or a claim that an agent will behave safely outside the tested

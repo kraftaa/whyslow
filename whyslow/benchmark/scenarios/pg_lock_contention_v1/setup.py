@@ -286,3 +286,15 @@ def _pre_clean(ctx: common.Context) -> None:
     for path in (ctx.state_dir, ctx.workspace_dir):
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
+
+
+def snapshot(ctx: common.Context) -> dict:
+    """Protected data plus live scenario sessions for final-state diffs."""
+    conn = common.connect(ctx.config.admin_dsn("whyslow_lock_snapshot"))
+    try:
+        return {
+            "integrity": common.integrity_snapshot(conn),
+            "scenario_backends": common.scenario_backends(conn),
+        }
+    finally:
+        conn.close()
