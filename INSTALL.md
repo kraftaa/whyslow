@@ -5,8 +5,16 @@ Editable installs (`pip install -e`) are for development only.
 
 ## Install a release
 
-For a normal CLI installation, use `pipx install whyslow-db`. For a versioned
-production deployment, download the release assets and verify their checksums:
+For a normal CLI installation on macOS or Linux with Homebrew, use:
+
+```bash
+brew install kraftaa/tap/whyslow-db
+whyslow --version
+```
+
+On any supported platform, `pipx install whyslow-db` provides the same
+`whyslow` command. For a versioned production deployment, download the release
+assets and verify their checksums:
 
 ```bash
 gh release download v0.5.1 --repo kraftaa/whyslow --dir /tmp/whyslow-v0.5.1
@@ -55,6 +63,9 @@ Enable one `whyslow-collect-puma@HOST` instance for each Puma target.
 
 Never replace packages inside the running environment. Build the new
 versioned environment first, verify it, and keep the previous one intact.
+
+For a standalone Homebrew installation, upgrade with `brew update` followed by
+`brew upgrade whyslow-db`. For pipx, use `pipx upgrade whyslow-db`.
 
 ```bash
 sudo -u whyslow /opt/whyslow/venv/bin/whyslow backup \

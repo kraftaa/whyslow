@@ -16,9 +16,16 @@ whyslow --from 11:42 --to 11:47      # or: whyslow --last 15m
 Install the `whyslow-db` distribution; the command remains `whyslow`:
 
 ```bash
+# macOS or Linux with Homebrew
+brew install kraftaa/tap/whyslow-db
+
+# or, on any supported platform
 pipx install whyslow-db
-# or: python -m pip install whyslow-db
 ```
+
+Use `brew upgrade whyslow-db` or `pipx upgrade whyslow-db` to install a newer
+release. Direct `python -m pip install whyslow-db` also works inside a virtual
+environment.
 
 ## Test database agents before trusting them
 
